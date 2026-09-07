@@ -17,6 +17,8 @@ impl LlamaCppRuntime {
         details.insert(AcceleratorId::Metal, AcceleratorAvailability::available());
         #[cfg(feature = "gpu-cuda")]
         details.insert(AcceleratorId::Cuda, AcceleratorAvailability::available());
+        #[cfg(feature = "gpu-vulkan")]
+        details.insert(AcceleratorId::Vulkan, AcceleratorAvailability::available());
         Self {
             capabilities: RuntimeCapabilities::from_details(details, vec![ModelFormat::Gguf]),
         }

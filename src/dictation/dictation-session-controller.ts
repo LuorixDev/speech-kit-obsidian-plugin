@@ -247,7 +247,7 @@ export class DictationSessionController {
       void this.handleSidecarEvent(event);
     });
     this.applyUiState('idle');
-    this.dependencies.setRibbonAccelerator(null);
+    this.dependencies.setRibbonAccelerator('cpu');
     this.dependencies.setRibbonBufferLength(0);
   }
 
@@ -699,7 +699,7 @@ export class DictationSessionController {
     }
     this.activeSessionId = null;
     this.dependencies.setRibbonBufferLength(0);
-    this.dependencies.setRibbonAccelerator(null);
+    this.dependencies.setRibbonAccelerator('cpu');
     this.dependencies.audioLevelMeter.clearSession(sessionId);
     this.applyUiState('idle');
     this.resetQueueTier();
@@ -750,7 +750,7 @@ export class DictationSessionController {
     if (this.activeSessionId === sessionId) {
       this.activeSessionId = null;
       this.dependencies.setRibbonBufferLength(0);
-      this.dependencies.setRibbonAccelerator(null);
+      this.dependencies.setRibbonAccelerator('cpu');
       this.dependencies.audioLevelMeter.clearSession(sessionId);
       this.applyUiState('idle');
       this.resetQueueTier();
@@ -801,7 +801,7 @@ export class DictationSessionController {
 
       case 'session_started':
         if (event.sessionId === this.activeSessionId) {
-          this.dependencies.setRibbonAccelerator(event.accelerator ?? null);
+          this.dependencies.setRibbonAccelerator(event.accelerator ?? 'cpu');
         }
         return;
 

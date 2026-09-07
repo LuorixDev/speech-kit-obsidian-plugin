@@ -9,8 +9,8 @@ const funasrFeature = supportsFunasr ? ',engine-funasr' : '';
 
 const features =
   process.platform === 'darwin'
-    ? 'engine-whisper,engine-cohere-transcribe,engine-hy-mt,engine-moonshine,engine-nemotron-asr,engine-pocket-tts,engine-supertonic,gpu-metal'
-    : `engine-whisper,engine-cohere-transcribe${funasrFeature},engine-hy-mt,engine-moonshine,engine-nemotron-asr,engine-pocket-tts,engine-supertonic`;
+    ? 'engine-whisper,engine-cohere-transcribe,engine-hy-mt,engine-moonshine,engine-nemotron-asr,engine-pocket-tts,engine-supertonic,gpu-metal,gpu-vulkan'
+    : `engine-whisper,engine-cohere-transcribe${funasrFeature},engine-hy-mt,engine-moonshine,engine-nemotron-asr,engine-pocket-tts,engine-supertonic,gpu-vulkan`;
 
 const cargoArgs = [
   'build',

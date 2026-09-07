@@ -334,6 +334,8 @@ fn model_params_for_acceleration(
         None => Ok(params.with_devices(&[])?),
         #[cfg(feature = "gpu-cuda")]
         Some(HelperAcceleratorId::Cuda) => Ok(params.with_n_gpu_layers(1000)),
+        #[cfg(feature = "gpu-vulkan")]
+        Some(HelperAcceleratorId::Vulkan) => Ok(params.with_n_gpu_layers(1000)),
         #[cfg(feature = "gpu-metal")]
         Some(HelperAcceleratorId::Metal) => Ok(params.with_n_gpu_layers(1000)),
         Some(accelerator) => bail!(

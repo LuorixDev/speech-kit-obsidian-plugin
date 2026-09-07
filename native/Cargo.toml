@@ -54,6 +54,7 @@ engine-supertonic = ["dep:regex", "dep:unicode-normalization"]
 engine-hy-mt = ["dep:llama-cpp-2", "dep:llama-cpp-sys-2"]
 gpu-metal = ["whisper-rs/metal", "llama-cpp-2/metal"]
 gpu-cuda = ["whisper-rs/cuda", "llama-cpp-2/cuda"]
+gpu-vulkan = ["llama-cpp-2/vulkan"]
 
 # Test/bench-only dependencies for the end-to-end quality suite under `tests/`
 # and `benches/`. Runtime `[dependencies]` above (serde, serde_json, sha2, uuid,
