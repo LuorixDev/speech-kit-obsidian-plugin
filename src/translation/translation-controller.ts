@@ -405,9 +405,11 @@ export class TranslationController {
       throw error;
     }
     const stillCurrent = slot.latest === request;
-    // During speech, show completed work even if a newer partial has arrived.
-    // Otherwise continuous revisions can suppress every visible update.
-    const canPublish = stillCurrent || (!request.update.isFinal && !slot.latest.update.isFinal);
+    // Never publish a stale snapshot. Under load, an older partial can finish
+    // after several newer revisions and inserting it would create delayed,
+    // out-of-order translation blocks. The completion handler will enqueue
+    // the latest snapshot immediately.
+    const canPublish = stillCurrent;
     if (
       this.disposed ||
       slot.generation !== this.realtimeGeneration ||
