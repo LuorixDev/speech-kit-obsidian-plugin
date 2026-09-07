@@ -1,0 +1,43 @@
+diff --git a/app/cli/main.cpp b/app/cli/main.cpp
+index ad59f45..d5542a5 100644
+--- a/app/cli/main.cpp
++++ b/app/cli/main.cpp
+@@ -824,6 +824,38 @@ int audiocpp_cli_main(int argc, char ** argv) {
+         session_options.options = collect_key_value_args(argc, argv, "--session-option");
+         auto model = registry.load(load_request);
+         auto session = model->create_task_session(task_spec, session_options);
++        if (has_arg(argc, argv, "--speech-kit-session")) {
++            if (session->family() != "fun_asr_nano" || task_spec.mode != engine::runtime::RunMode::Offline) {
++                throw std::runtime_error("persistent protocol requires offline Fun-ASR Nano");
++            }
++            auto * offline = dynamic_cast<engine::runtime::IOfflineVoiceTaskSession *>(session.get());
++            if (!offline) throw std::runtime_error("missing offline session");
++            require_known_args(argc, argv);
++            std::cout << "{\"type\":\"ready\"}" << std::endl;
++            std::string line;
++            while (std::getline(std::cin, line)) {
++                if (line.size() > 65536) throw std::runtime_error("request too large");
++                int64_t id = 0;
++                try {
++                    const auto message = engine::io::json::parse(line);
++                    id = message.require("id").as_i64();
++                    auto request = minitts::cli::build_request_from_json(message, {});
++                    if (!request.audio_input || request.audio_input->samples.size() > 16000 * 60 * 5) {
++                        throw std::runtime_error("invalid audio request");
++                    }
++                    session->prepare(engine::runtime::build_preparation_request(request));
++                    const auto result = offline->run(request);
++                    const std::string text = result.text_output ? result.text_output->text : "";
++                    std::cout << "{\"type\":\"result\",\"id\":" << id << ",\"text\":"
++                              << engine::io::json::stringify_string(text) << "}" << std::endl;
++                } catch (const std::exception & error) {
++                    std::cout << "{\"type\":\"error\",\"id\":" << id << ",\"message\":"
++                              << engine::io::json::stringify_string(error.what()) << "}" << std::endl;
++                    return 1;
++                }
++            }
++            return 0;
++        }
+         const auto voice_state_out = optional_path_arg(argc, argv, "--voice-state-out");
+         const auto text_out = optional_path_arg(argc, argv, "--text-out");
+         const auto words_out = optional_path_arg(argc, argv, "--words-out");

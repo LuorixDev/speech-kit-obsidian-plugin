@@ -1052,6 +1052,39 @@
       "runtimeId": "funasr_llamacpp",
       "familyId": "funasr_hybrid",
       "task": "stt",
+      "modelId": "funasr_nano_2512_single_streaming_f16",
+      "collectionId": "funasr_chinese_streaming",
+      "displayName": "Fun-ASR Nano 2512 F16 Single Model (Experimental)",
+      "summary": "One Nano model for provisional and final recognition, without Paraformer. Experimental full-utterance re-recognition; slower updates and mixed-language omissions are possible.",
+      "languageTags": ["zh", "yue", "en", "ja"],
+      "supportsAutomaticLanguageDetection": true,
+      "supportedAccelerators": ["cpu", "vulkan"],
+      "uxTags": ["streaming", "vulkan", "cpu-fallback", "heavy", "requires-terms-review"],
+      "licenseLabel": "FunASR Model License 1.1",
+      "licenseUrl": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-GGUF/blob/ce72677f84900f0dc57f498ace253bfb3c9155b6/README.md#license",
+      "sourceUrl": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-GGUF/tree/ce72677f84900f0dc57f498ace253bfb3c9155b6",
+      "modelCardUrl": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512/tree/1fd03aa58072a4c00bf0a0b149cc4cf0d36d11ed",
+      "notes": [
+        "Uses the same model for full-utterance provisional revisions and an independent final pass. Does not load Paraformer.",
+        "Requires the persistent audiocpp_session helper. Loads one model per recording and reuses it for previews and finals, including subsequent utterances. The first preview is eligible after 0.5 seconds of audio; stopping releases the model after finalization.",
+        "Mixed Chinese/English test audio showed omissions. Supported language tags do not guarantee accurate code-switching."
+      ],
+      "artifacts": [
+        {
+          "artifactId": "nano_2512_model",
+          "role": "transcription_model",
+          "required": true,
+          "filename": "fun-asr-nano-2512-f16.gguf",
+          "downloadUrl": "https://huggingface.co/FunAudioLLM/Fun-ASR-Nano-2512-GGUF/resolve/ce72677f84900f0dc57f498ace253bfb3c9155b6/fun-asr-nano-2512-f16.gguf",
+          "sha256": "3d906c3ccfed07efef88ff53d6cc94b788b9d2edf1492a5679d041b43e98c5be",
+          "sizeBytes": 1675708832
+        }
+      ]
+    },
+    {
+      "runtimeId": "funasr_llamacpp",
+      "familyId": "funasr_hybrid",
+      "task": "stt",
       "modelId": "funasr_nano_2512_paraformer_zh_streaming_f16",
       "collectionId": "funasr_chinese_streaming",
       "displayName": "Fun-ASR Nano 2512 F16 Live",

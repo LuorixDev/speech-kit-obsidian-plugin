@@ -14,7 +14,11 @@ pub struct TencentHyMtAdapter;
 static CAPABILITIES: LazyLock<ModelFamilyCapabilities> =
     LazyLock::new(|| ModelFamilyCapabilities {
         task: ModelTask::Translation,
-        supports_hardware_acceleration: cfg!(any(feature = "gpu-metal", feature = "gpu-cuda")),
+        supports_hardware_acceleration: cfg!(any(
+            feature = "gpu-metal",
+            feature = "gpu-cuda",
+            feature = "gpu-vulkan"
+        )),
         available_voices: vec![],
         supports_speed_control: false,
         output_sample_rate: None,
@@ -65,5 +69,36 @@ impl ModelFamilyAdapter for TencentHyMtAdapter {
         Err(TranscriptionError::unsupported_engine(
             "Tencent HY-MT 2 runs in the packaged translation helper.".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::capabilities::AcceleratorId;
+
+    #[test]
+    fn hardware_capability_includes_vulkan_only_builds() {
+        assert_eq!(
+            TencentHyMtAdapter
+                .capabilities()
+                .supports_hardware_acceleration,
+            cfg!(any(
+                feature = "gpu-metal",
+                feature = "gpu-cuda",
+                feature = "gpu-vulkan"
+            ))
+        );
+        #[cfg(feature = "gpu-vulkan")]
+        assert!(
+            TencentHyMtAdapter.supports_accelerator_for_model(
+                Path::new("translation.gguf"),
+                AcceleratorId::Vulkan
+            )
+        );
+        assert!(
+            TencentHyMtAdapter
+                .supports_accelerator_for_model(Path::new("translation.gguf"), AcceleratorId::Cpu)
+        );
     }
 }

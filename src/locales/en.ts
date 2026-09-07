@@ -1,4 +1,6 @@
 export const en = {
+  'catalog.funasr_nano_2512_single_streaming_f16.summary':
+    'Experimental single-model draft and final recognition without Paraformer. Keeps the model loaded during recording. Mixed Chinese/English speech may contain omissions.',
   'notice.dictationNotActive': 'Dictation is not currently active.',
   'notice.dictationStartFailed': 'Could not start dictation.',
   'notice.dictationStopFailed': 'Could not stop dictation.',

@@ -24,6 +24,14 @@ Before changing an ownership boundary, compatibility contract, core product cons
 
 ## Prerequisites
 
+Single-model FunASR requires a persistent helper built from pinned audio.cpp
+source: run `node scripts/build-funasr-session.mjs --release` before installing
+with `node scripts/install-dev-plugin.mjs --release --sidecars --vault <vault>`.
+This needs CMake, a C++ compiler, Vulkan development headers, SPIR-V headers,
+and glslc. The helper is packaged separately as `audiocpp_session`; the official
+one-shot `audiocpp_cli` remains unchanged for existing hybrid models. No model
+weights are downloaded by this helper build.
+
 - Node.js `24.14.1`, npm `11.12.1`
 - TypeScript `6.0.3`
 - Rust `1.94.1`

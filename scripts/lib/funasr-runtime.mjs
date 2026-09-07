@@ -221,6 +221,8 @@ export async function requireFunasrSidecarArtifacts({ destinationDirectory }) {
       throw new Error(`Missing FunASR sidecar runtime artifact at ${path}.`);
     }
   }
+  const sessionHelper = join(destinationDirectory, 'audiocpp_session');
+  if (await fileExists(sessionHelper)) paths.push(sessionHelper);
   return paths;
 }
 

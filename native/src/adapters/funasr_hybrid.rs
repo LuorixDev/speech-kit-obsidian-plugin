@@ -14,6 +14,7 @@ use std::sync::LazyLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::funasr_session::FunasrSession;
 use sherpa_onnx::{OnlineRecognizer, OnlineRecognizerConfig, OnlineStream};
 use uuid::Uuid;
 
@@ -149,9 +150,14 @@ impl ModelFamilyAdapter for FunasrHybridAdapter {
         Ok(Box::new(LoadedFunasrHybridModel {
             helper,
             language: "auto".to_string(),
-            online_stream: recognizer.create_stream(),
+            online_stream: recognizer
+                .as_ref()
+                .map(|recognizer| recognizer.create_stream()),
             recognizer,
             samples: Vec::new(),
+            next_single_partial_at: None,
+            single_partial_text: String::new(),
+            persistent: None,
             accelerator: gpu.accelerator,
             paths,
         }))
@@ -161,6 +167,10 @@ impl ModelFamilyAdapter for FunasrHybridAdapter {
 struct HybridModelPaths {
     final_model: FinalModelPaths,
     final_vad: PathBuf,
+    online: Option<OnlineModelPaths>,
+}
+
+struct OnlineModelPaths {
     online_decoder: PathBuf,
     online_encoder: PathBuf,
     online_tokens: PathBuf,
@@ -188,6 +198,19 @@ impl FinalModelPaths {
 impl HybridModelPaths {
     fn from_entry(path: &Path) -> Result<Self, TranscriptionError> {
         validate_model_path(path)?;
+        if NANO_2512_MODEL_FILENAMES
+            .iter()
+            .any(|name| path.file_name() == Some(OsStr::new(name)))
+        {
+            return Ok(Self {
+                final_model: FinalModelPaths::Nano2512 {
+                    model: path.to_path_buf(),
+                },
+                // Nano 2512 uses the session's VAD, not an external VAD model.
+                final_vad: PathBuf::new(),
+                online: None,
+            });
+        }
         if path.file_name() != Some(OsStr::new(ONLINE_ENCODER_FILENAME)) {
             return Err(TranscriptionError::invalid_model_with_details(format!(
                 "FunASR Chinese Hybrid must be selected through {ONLINE_ENCODER_FILENAME}; received {}",
@@ -221,13 +244,21 @@ impl HybridModelPaths {
         Ok(Self {
             final_model,
             final_vad: required_file(root, FINAL_VAD_FILENAME)?,
-            online_decoder: required_file(root, ONLINE_DECODER_FILENAME)?,
-            online_encoder: path.to_path_buf(),
-            online_tokens: required_file(root, ONLINE_TOKENS_FILENAME)?,
+            online: Some(OnlineModelPaths {
+                online_decoder: required_file(root, ONLINE_DECODER_FILENAME)?,
+                online_encoder: path.to_path_buf(),
+                online_tokens: required_file(root, ONLINE_TOKENS_FILENAME)?,
+            }),
         })
     }
 
     fn require_helper(&self) -> Result<PathBuf, TranscriptionError> {
+        if self.online.is_none() {
+            return crate::runtimes::funasr::audio_cpp_session_helper_path().ok_or_else(||
+                TranscriptionError::invalid_model_with_details(
+                    "The persistent FunASR helper is missing; build and install audiocpp_session before selecting single-model mode.".into()
+                ));
+        }
         let (helper, name) = match &self.final_model {
             FinalModelPaths::Nano { .. } => (nano_helper_path(), "Fun-ASR Nano"),
             FinalModelPaths::Nano2512 { .. } => (audio_cpp_helper_path(), "Fun-ASR Nano 2512"),
@@ -301,7 +332,10 @@ fn verify_gguf(path: &Path) -> Result<(), TranscriptionError> {
 
 fn create_online_recognizer(
     paths: &HybridModelPaths,
-) -> Result<OnlineRecognizer, TranscriptionError> {
+) -> Result<Option<OnlineRecognizer>, TranscriptionError> {
+    let Some(paths) = paths.online.as_ref() else {
+        return Ok(None);
+    };
     let mut config = OnlineRecognizerConfig::default();
     config.model_config.paraformer.encoder = Some(paths.online_encoder.to_string_lossy().into());
     config.model_config.paraformer.decoder = Some(paths.online_decoder.to_string_lossy().into());
@@ -309,7 +343,7 @@ fn create_online_recognizer(
     config.model_config.num_threads = 4;
     config.decoding_method = Some("greedy_search".to_string());
 
-    OnlineRecognizer::create(&config).ok_or_else(|| {
+    OnlineRecognizer::create(&config).map(Some).ok_or_else(|| {
         TranscriptionError::invalid_model_with_details(
             "unable to load the FunASR Paraformer streaming model".to_string(),
         )
@@ -319,20 +353,42 @@ fn create_online_recognizer(
 struct LoadedFunasrHybridModel {
     helper: PathBuf,
     language: String,
-    online_stream: OnlineStream,
+    online_stream: Option<OnlineStream>,
     paths: HybridModelPaths,
-    recognizer: OnlineRecognizer,
+    recognizer: Option<OnlineRecognizer>,
     samples: Vec<i16>,
+    next_single_partial_at: Option<Instant>,
+    single_partial_text: String,
+    persistent: Option<FunasrSession>,
     accelerator: Option<AcceleratorId>,
 }
 
 impl LoadedFunasrHybridModel {
-    fn run_final_pass(&self) -> Result<String, TranscriptionError> {
+    fn run_final_pass(&mut self) -> Result<String, TranscriptionError> {
         if self.samples.is_empty() {
             return Ok(String::new());
         }
 
         let wav = TemporaryWav::write(&self.samples)?;
+        if self.paths.online.is_none() {
+            return self
+                .persistent
+                .as_mut()
+                .ok_or_else(|| {
+                    TranscriptionError::transcription_failure(
+                        "FunASR session",
+                        "model session was not initialized",
+                    )
+                })?
+                .transcribe(
+                    wav.path(),
+                    nano_2512_language(&self.language),
+                    FINAL_PASS_TIMEOUT,
+                )
+                .map_err(|error| {
+                    TranscriptionError::transcription_failure("FunASR session", error)
+                });
+        }
         if matches!(&self.paths.final_model, FinalModelPaths::Nano { .. }) {
             let backend = nano_backend(self.accelerator);
             return self
@@ -410,7 +466,10 @@ impl LoadedFunasrHybridModel {
             .arg(&self.paths.final_vad)
             .arg("-a")
             .arg(wav_path);
-        command.arg("--backend").arg(backend);
+        // The official CPU-only Nano CLI predates the backend option.
+        if backend != "cpu" || nano_helper_supports_backend(AcceleratorId::Cpu) {
+            command.arg("--backend").arg(backend);
+        }
         let output = run_helper_with_timeout(
             &mut command,
             &format!("{backend} Fun-ASR Nano final pass"),
@@ -604,6 +663,12 @@ fn parse_helper_output(stdout: &[u8]) -> String {
 
 impl StreamingModel for LoadedFunasrHybridModel {
     fn partial_cadence(&self) -> StreamingPartialCadence {
+        if self.recognizer.is_none() {
+            return StreamingPartialCadence {
+                min_audio_samples: 8_000,
+                min_wall_time: Duration::from_millis(500),
+            };
+        }
         StreamingPartialCadence {
             min_audio_samples: 1_600,
             min_wall_time: Duration::from_millis(100),
@@ -612,11 +677,14 @@ impl StreamingModel for LoadedFunasrHybridModel {
 
     fn accept_audio(&mut self, samples: &[i16]) -> Result<(), TranscriptionError> {
         self.samples.extend_from_slice(samples);
+        let Some(stream) = self.online_stream.as_ref() else {
+            return Ok(());
+        };
         let normalized = samples
             .iter()
             .map(|sample| f32::from(*sample) / 32_768.0)
             .collect::<Vec<_>>();
-        self.online_stream.accept_waveform(SAMPLE_RATE, &normalized);
+        stream.accept_waveform(SAMPLE_RATE, &normalized);
         Ok(())
     }
 
@@ -638,6 +706,17 @@ impl StreamingModel for LoadedFunasrHybridModel {
         };
         match supported {
             true => {
+                if self.paths.online.is_none() && self.persistent.is_none() {
+                    let FinalModelPaths::Nano2512 { model } = &self.paths.final_model else {
+                        unreachable!("single-model entries use Nano 2512");
+                    };
+                    self.persistent = Some(
+                        FunasrSession::start(&self.helper, model, nano_backend(self.accelerator))
+                            .map_err(|error| {
+                            TranscriptionError::transcription_failure("FunASR session", error)
+                        })?,
+                    );
+                }
                 self.language = language.to_string();
                 Ok(())
             }
@@ -649,12 +728,25 @@ impl StreamingModel for LoadedFunasrHybridModel {
     }
 
     fn partial(&mut self) -> Result<EngineTranscriptOutput, TranscriptionError> {
-        while self.recognizer.is_ready(&self.online_stream) {
-            self.recognizer.decode(&self.online_stream);
+        let (Some(recognizer), Some(stream)) = (&self.recognizer, &self.online_stream) else {
+            // Measure cooldown from completion so queued audio cannot trigger
+            // back-to-back stale previews while finalization is waiting.
+            if self
+                .next_single_partial_at
+                .is_some_and(|deadline| Instant::now() < deadline)
+            {
+                return Ok(engine_output(&self.single_partial_text, self.samples.len()));
+            }
+            let result = self.run_final_pass();
+            self.next_single_partial_at = Some(Instant::now() + Duration::from_millis(100));
+            self.single_partial_text = result?;
+            return Ok(engine_output(&self.single_partial_text, self.samples.len()));
+        };
+        while recognizer.is_ready(stream) {
+            recognizer.decode(stream);
         }
-        let text = self
-            .recognizer
-            .get_result(&self.online_stream)
+        let text = recognizer
+            .get_result(stream)
             .map(|result| result.text)
             .unwrap_or_default();
         Ok(engine_output(&text, self.samples.len()))
@@ -670,7 +762,12 @@ impl StreamingModel for LoadedFunasrHybridModel {
     }
 
     fn reset_utterance(&mut self) {
-        self.online_stream = self.recognizer.create_stream();
+        self.next_single_partial_at = None;
+        self.single_partial_text.clear();
+        self.online_stream = self
+            .recognizer
+            .as_ref()
+            .map(|recognizer| recognizer.create_stream());
         self.samples.clear();
     }
 }
@@ -819,6 +916,49 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn single_model_does_not_require_paraformer_or_external_vad() {
+        let directory = test_model_directory("single");
+        let path = directory.join("fun-asr-nano-2512-f16.gguf");
+        fs::write(&path, b"GGUF").unwrap();
+        let paths = super::HybridModelPaths::from_entry(&path).unwrap();
+        paths.verify_final_models().unwrap();
+        assert!(paths.online.is_none());
+        assert!(super::create_online_recognizer(&paths).unwrap().is_none());
+        let mut model = super::LoadedFunasrHybridModel {
+            helper: PathBuf::new(),
+            language: "auto".to_string(),
+            online_stream: None,
+            recognizer: None,
+            paths,
+            samples: Vec::new(),
+            next_single_partial_at: None,
+            single_partial_text: String::new(),
+            persistent: None,
+            accelerator: None,
+        };
+        use crate::engine::traits::StreamingModel;
+        assert_eq!(model.partial_cadence().min_audio_samples, 8_000);
+        assert_eq!(
+            model.partial_cadence().min_wall_time,
+            Duration::from_millis(500)
+        );
+        // Lifecycle unit test does not start a real native model.
+        model.language = "en".into();
+        model.accept_audio(&[1, 2, 3]).unwrap();
+        assert_eq!(model.samples, [1, 2, 3]);
+        model.single_partial_text = "preview".to_string();
+        model.next_single_partial_at = Some(Instant::now() + Duration::from_secs(60));
+        assert_eq!(model.partial().unwrap().segments[0].text, "preview");
+        model.reset_utterance();
+        assert!(model.next_single_partial_at.is_none());
+        assert!(model.single_partial_text.is_empty());
+        assert!(model.samples.is_empty());
+        assert!(model.online_stream.is_none());
+        assert!(model.finalize_utterance().unwrap().segments.is_empty());
+        fs::remove_dir_all(directory).unwrap();
+    }
 
     #[test]
     fn engine_output_omits_an_empty_final_result() {

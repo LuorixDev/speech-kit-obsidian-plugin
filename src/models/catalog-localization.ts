@@ -1,6 +1,7 @@
 import { t } from '../shared/i18n';
 
 const MODEL_SUMMARY_KEYS = {
+  funasr_nano_2512_single_streaming_f16: 'catalog.funasr_nano_2512_single_streaming_f16.summary',
   cohere_transcribe_fp16: 'catalog.cohere_transcribe_fp16.summary',
   cohere_transcribe_int8: 'catalog.cohere_transcribe_int8.summary',
   cohere_transcribe_q4: 'catalog.cohere_transcribe_q4.summary',

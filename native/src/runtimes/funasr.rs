@@ -70,6 +70,10 @@ pub fn audio_cpp_helper_path() -> Option<PathBuf> {
     helper_path(AUDIO_CPP_HELPER_BASENAME)
 }
 
+pub fn audio_cpp_session_helper_path() -> Option<PathBuf> {
+    helper_path("audiocpp_session")
+}
+
 pub fn audio_cpp_helper_supports_backend(accelerator: AcceleratorId) -> bool {
     let Some(helper) = audio_cpp_helper_path() else {
         return false;

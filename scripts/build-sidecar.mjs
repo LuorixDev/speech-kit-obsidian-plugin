@@ -34,6 +34,11 @@ console.log(`cargo ${cargoArgs.join(' ')}`);
 execFileSync('cargo', cargoArgs, { stdio: 'inherit' });
 
 if (supportsFunasr) {
+  execFileSync(
+    process.execPath,
+    ['scripts/build-funasr-session.mjs', ...(args.has('--release') ? ['--release'] : [])],
+    { stdio: 'inherit' },
+  );
   await ensureFunasrSidecarArtifacts({
     destinationDirectory: `native/target/${profile}`,
     download: true,

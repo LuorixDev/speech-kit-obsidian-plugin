@@ -1,6 +1,8 @@
 import type { TranslationCatalog } from '.';
 
 export const zh = {
+  'catalog.funasr_nano_2512_single_streaming_f16.summary':
+    '实验性单模型：草稿与定稿均用 Nano 2512，不加载 Paraformer。录音期间模型常驻，停止并定稿后释放；中英混说仍可能漏识别。',
   'catalog.funasr_nano_2512_paraformer_zh_streaming_q8_0.summary':
     '新一代 8 亿参数中文优先 Fun-ASR 终稿模型，强化方言、口音、远场和噪声语音识别，并保留低延迟 Paraformer 草稿。',
   'catalog.funasr_nano_2512_paraformer_zh_streaming_f16.summary':

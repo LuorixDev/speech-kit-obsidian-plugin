@@ -218,6 +218,7 @@ export class TranslationController {
         if (slot !== undefined && update.revision >= slot.latest.update.revision) {
           slot.latest = { source: '', update };
           slot.abortController?.abort();
+          this.scheduleRealtimeSlot(slot);
         }
       }
       return;
@@ -272,7 +273,15 @@ export class TranslationController {
       resolvedUpdate.isFinal ||
       (!slot.latest.update.isFinal && resolvedUpdate.revision >= slot.latest.update.revision)
     ) {
+      const previous = slot.latest;
       slot.latest = { source: text, update: resolvedUpdate };
+      // A final revision supersedes any provisional translation immediately.
+      // Abort the in-flight request so the single translation worker can move
+      // on to the final text instead of spending GPU time on stale partials.
+      if (resolvedUpdate.isFinal && previous !== slot.latest) {
+        slot.abortController?.abort();
+      }
+      this.scheduleRealtimeSlot(slot);
     }
   }
 
@@ -358,9 +367,6 @@ export class TranslationController {
 
   private async processRealtimeSlot(slot: RealtimeTranslationSlot): Promise<void> {
     const request = slot.latest;
-    // Configuration failures must also release this snapshot instead of
-    // repeatedly scheduling it ahead of other finalized utterances.
-    slot.processed = request;
     if (request.source.length === 0) return;
     const settings = this.dependencies.getSettings();
     const configuration = realtimeConfigurationKey(settings);
@@ -390,16 +396,18 @@ export class TranslationController {
         signal: abortController.signal,
       });
     } catch (error) {
-      // A failed revision is terminal for this snapshot. Retrying it from
-      // the scheduler would create an unbounded loop and starve newer text.
-      slot.processed = request;
+      const cancelled =
+        error instanceof TranslationCancelledError ||
+        (error instanceof DOMException && error.name === 'AbortError');
+      // Cancellation means a newer revision must be retried. Other failures
+      // are handled by the bounded final-revision retry logic in the pump.
+      if (!cancelled) slot.processed = request;
       throw error;
     }
     const stillCurrent = slot.latest === request;
     // During speech, show completed work even if a newer partial has arrived.
     // Otherwise continuous revisions can suppress every visible update.
     const canPublish = stillCurrent || (!request.update.isFinal && !slot.latest.update.isFinal);
-    slot.processed = request;
     if (
       this.disposed ||
       slot.generation !== this.realtimeGeneration ||
@@ -421,6 +429,10 @@ export class TranslationController {
         );
       }
     }
+    // Only successful, usable results become processed. If a newer revision
+    // arrived while this request was running, the scheduler will immediately
+    // enqueue that revision in the completion handler.
+    slot.processed = request;
   }
 
   private reopenActive(): boolean {
