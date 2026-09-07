@@ -1,4 +1,4 @@
-import type { CatalogModelRecord } from '../models/model-management-types';
+import type { AcceleratorId, CatalogModelRecord } from '../models/model-management-types';
 import type { TranslationLanguage } from './languages';
 
 export type TranslationJobResult =
@@ -15,6 +15,7 @@ export type TranslationJobState =
   | { error: unknown; phase: 'failed' };
 
 export interface TranslationJobRunOptions {
+  onAccelerator?: (accelerator: AcceleratorId) => void;
   onProgress: (completed: number, total: number) => void;
   onReady: () => void;
   signal: AbortSignal;

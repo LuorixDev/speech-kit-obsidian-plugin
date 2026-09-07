@@ -337,9 +337,16 @@ fn map_helper_event(event: HelperEvent) -> Event {
         HelperEvent::Started {
             translation_id,
             total,
+            accelerator,
         } => Event::TranslationStarted {
             translation_id,
             total,
+            accelerator: accelerator.map(|value| match value {
+                HelperAcceleratorId::Cuda => AcceleratorId::Cuda,
+                HelperAcceleratorId::DirectMl => AcceleratorId::DirectMl,
+                HelperAcceleratorId::Metal => AcceleratorId::Metal,
+                HelperAcceleratorId::Vulkan => AcceleratorId::Vulkan,
+            }),
         },
         HelperEvent::Progress {
             translation_id,

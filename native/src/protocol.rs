@@ -487,6 +487,8 @@ pub enum Event {
     TranslationStarted {
         translation_id: String,
         total: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        accelerator: Option<AcceleratorId>,
     },
     TranslationProgress {
         translation_id: String,

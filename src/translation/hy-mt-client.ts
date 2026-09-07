@@ -1,4 +1,4 @@
-import type { SelectedModel } from '../models/model-management-types';
+import type { AcceleratorId, SelectedModel } from '../models/model-management-types';
 import { asError } from '../shared/error-utils';
 import type { TranslationErrorEvent } from '../sidecar/protocol';
 import type { SidecarConnection } from '../sidecar/sidecar-connection';
@@ -20,6 +20,7 @@ interface HyMtTranslationOptions {
   modelSelection: SelectedModel;
   modelStorePathOverride?: string;
   onProgress: (completed: number, total: number) => void;
+  onAccelerator?: (accelerator: AcceleratorId) => void;
   onReady: () => void;
   sidecarConnection: Pick<
     SidecarConnection,
@@ -84,6 +85,7 @@ export async function translateWithHyMt(options: HyMtTranslationOptions): Promis
       switch (event.type) {
         case 'translation_started':
           resetTimeout();
+          options.onAccelerator?.(event.accelerator ?? 'cpu');
           options.onReady();
           break;
         case 'translation_progress':

@@ -44,6 +44,7 @@ export class DictationRibbonController {
   private queueTier: QueueBackpressureTier = 'normal';
   private currentIcon: RibbonIcon | null = null;
   private accelerator: AcceleratorId | null = null;
+  private translationAccelerator: AcceleratorId | null = null;
   private bufferLength = 0;
   private readonly acceleratorBadge: HTMLSpanElement;
   private readonly bufferBadge: HTMLSpanElement;
@@ -114,6 +115,11 @@ export class DictationRibbonController {
     this.renderBadges();
   }
 
+  setTranslationAccelerator(accelerator: AcceleratorId | null): void {
+    this.translationAccelerator = accelerator;
+    this.renderBadges();
+  }
+
   setBufferLength(queuedUtterances: number): void {
     this.bufferLength = Math.max(0, Math.floor(queuedUtterances));
     this.renderBadges();
@@ -143,7 +149,11 @@ export class DictationRibbonController {
   }
 
   private renderBadges(): void {
-    this.acceleratorBadge.textContent = acceleratorBadgeText(this.accelerator);
+    const transcription = acceleratorBadgeText(this.accelerator);
+    const translation = acceleratorBadgeText(this.translationAccelerator);
+    this.acceleratorBadge.textContent = translation
+      ? `${transcription}${translation}`
+      : transcription;
     this.bufferBadge.textContent = `${this.bufferLength}`;
     this.element.dataset.localSttAccelerator = this.accelerator ?? 'none';
   }

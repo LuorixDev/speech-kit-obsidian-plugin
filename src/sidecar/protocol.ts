@@ -335,6 +335,7 @@ export interface SynthesisErrorEvent extends EnvelopeBase<'synthesis_error'> {
 }
 
 export interface TranslationStartedEvent extends EnvelopeBase<'translation_started'> {
+  accelerator?: AcceleratorId;
   total: number;
   translationId: string;
 }

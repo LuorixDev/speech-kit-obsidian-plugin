@@ -188,6 +188,7 @@ fn main() -> Result<()> {
             &HelperEvent::Started {
                 translation_id: work.translation_id.clone(),
                 total: work.texts.len(),
+                accelerator: work.accelerator,
             },
         )?;
         if cached.as_ref().is_none_or(|model| {

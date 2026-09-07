@@ -130,6 +130,9 @@ interface TranslationControllerDependencies {
     'cancelTranslation' | 'startTranslation' | 'subscribe'
   >;
   setDetachedStatus?: (state: TranslationJobState | null, reopen: () => void) => void;
+  setTranslationAccelerator?: (
+    accelerator: import('../models/model-management-types').AcceleratorId | null,
+  ) => void;
 }
 interface ActiveTranslation {
   configuration: TranslationConfiguration;
@@ -623,7 +626,13 @@ export class TranslationController {
       const translations = await adapter({
         installed,
         model,
-        options,
+        options: {
+          ...options,
+          onAccelerator: (accelerator) => {
+            this.dependencies.setTranslationAccelerator?.(accelerator);
+            options.onAccelerator?.(accelerator);
+          },
+        },
         settings: this.dependencies.getSettings(),
         sidecarConnection: this.dependencies.sidecarConnection,
         sourceLanguage,

@@ -45,6 +45,7 @@ pub enum HelperEvent {
     Started {
         translation_id: String,
         total: usize,
+        accelerator: Option<HelperAcceleratorId>,
     },
     Progress {
         translation_id: String,

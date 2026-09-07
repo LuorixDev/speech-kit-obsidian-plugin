@@ -408,6 +408,8 @@ export default class LocalSttPlugin extends Plugin {
       openModelPicker: () => this.openModelPicker({ initialTask: 'translation' }),
       saveSettings: (nextSettings) => this.updateSettings(nextSettings),
       setDetachedStatus: (state, reopen) => this.renderTranslationStatus(state, reopen),
+      setTranslationAccelerator: (accelerator) =>
+        this.ribbonController?.setTranslationAccelerator(accelerator),
       sidecarConnection: this.requireSidecarConnection(),
     });
 
