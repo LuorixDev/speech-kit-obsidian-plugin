@@ -2169,7 +2169,7 @@ fn resolve_accelerator(
                         .available_accelerators
                         .contains(accelerator)
                         && adapter.supports_accelerator_for_model(model_path, *accelerator)
-                }),
+                })
                 }
                 None => {
                     // Reaching here means dispatch picked a runtime the registry
