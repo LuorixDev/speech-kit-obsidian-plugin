@@ -9,7 +9,7 @@ use crate::engine::capabilities::AcceleratorId;
 use crate::protocol::{Event, read_json_frame, write_json_frame};
 use crate::translation_helper_protocol::{HelperAcceleratorId, HelperCommand, HelperEvent};
 
-const HELPER_IDLE_TTL: Duration = Duration::from_secs(5 * 60);
+const HELPER_IDLE_TTL: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub struct StartTranslation {
@@ -247,7 +247,9 @@ fn worker_main(commands: Receiver<WorkerCommand>, events: Sender<Event>) {
             }
             idle_since = None;
         }
-        match commands.recv_timeout(Duration::from_millis(10)) {
+        // No translation is latency-sensitive while idle; avoid a 100 Hz wakeup
+        // that keeps a CPU core active and raises laptop power draw.
+        match commands.recv_timeout(Duration::from_millis(100)) {
             Ok(WorkerCommand::Start(request)) => {
                 if active.is_some() {
                     let _ = events.send(Event::TranslationError {
