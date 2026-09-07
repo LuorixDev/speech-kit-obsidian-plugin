@@ -1,5 +1,16 @@
 # Contributing
 
+## Fork Scope
+
+Contributions and bug reports for this edition belong in
+[LuorixDev/speech-kit-obsidian-plugin](https://github.com/LuorixDev/speech-kit-obsidian-plugin),
+not upstream. Do not open or update upstream pull requests on behalf of this fork.
+Development prioritizes Chinese, English, and mixed-language local workflows,
+accurate model capability labels, bilingual UI localization, and reliable GPU execution.
+Preserve upstream attribution and licensing. Do not claim multilingual streaming
+support based only on a final-pass model's supported languages.
+
+
 A TypeScript Obsidian plugin (`src/`) paired with a native Rust sidecar (`native/`)
 that handles local speech inference. Dictation audio crosses the boundary as
 16 kHz mono PCM over stdin and transcripts return as JSON events. For read

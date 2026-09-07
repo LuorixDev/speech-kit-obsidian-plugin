@@ -1,11 +1,11 @@
 {
   "id": "local-dictation",
-  "name": "Speech Kit",
+  "name": "Speech Kit (ZH/EN Fork)",
   "version": "2026.8.7",
   "minAppVersion": "1.11.5",
-  "description": "Local speech and language toolkit for notes. Dictate, transcribe meetings, translate text, and read notes aloud with on-device models.",
-  "author": "Alexander Brittain",
-  "authorUrl": "https://github.com/brittain9",
-  "helpUrl": "https://github.com/brittain9/speech-kit-obsidian-plugin",
+  "description": "Independent local speech and translation fork focused on Chinese, English, and bilingual workflows. Language support varies by model.",
+  "author": "LuorixDev (fork), Alexander Brittain (original)",
+  "authorUrl": "https://github.com/LuorixDev",
+  "helpUrl": "https://github.com/LuorixDev/speech-kit-obsidian-plugin",
   "isDesktopOnly": true
 }

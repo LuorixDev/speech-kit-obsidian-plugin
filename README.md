@@ -1,3 +1,16 @@
+# Speech Kit: Chinese / English Fork
+
+An independently maintained fork of [Speech Kit](https://github.com/brittain9/speech-kit-obsidian-plugin), focused on local Chinese, English, and bilingual transcription and translation in Obsidian. Development is no longer targeted at upstream integration. Original authorship and license notices are preserved.
+
+这是独立维护的中英文本地化 fork，重点面向中文、英文及双语课程的本地转录与翻译，不再以合入上游为目标。保留中英文界面、原作者署名和许可证。
+
+- Fork repository and support: [LuorixDev/speech-kit-obsidian-plugin](https://github.com/LuorixDev/speech-kit-obsidian-plugin).
+- Current limitation: the bundled Chinese Paraformer streaming draft is not a general bilingual recognizer. A multilingual final pass does not make its draft multilingual.
+- Priorities: bilingual recognition accuracy, explicit draft/final language capabilities, reliable final translations, and verified local GPU execution. These are development goals, not guarantees for every model.
+- Installation: use this fork's build instructions in [CONTRIBUTING.md](CONTRIBUTING.md). The Obsidian community listing installs upstream, not this fork. The existing `local-dictation` plugin ID is retained for settings compatibility; the two editions cannot be installed side by side under that ID.
+
+The upstream overview below is retained for background; its release links and screenshots describe upstream unless stated otherwise.
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/brittain9/speech-kit-obsidian-plugin/main/docs/media/hero-dark.png">
   <img src="https://raw.githubusercontent.com/brittain9/speech-kit-obsidian-plugin/main/docs/media/hero-light.png" alt="Speech Kit — Speech and language toolkit for Obsidian" width="100%">
