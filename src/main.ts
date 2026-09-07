@@ -277,7 +277,12 @@ export default class LocalSttPlugin extends Plugin {
         }),
     );
 
+    let contextMenuOpen = false;
     const ribbonElement = this.addRibbonIcon('mic', t('ribbon.idle'), () => {
+      if (contextMenuOpen) {
+        contextMenuOpen = false;
+        return;
+      }
       void this.requireDictationController().toggleDictation();
     });
     this.ribbonController = new DictationRibbonController(ribbonElement);
@@ -285,8 +290,20 @@ export default class LocalSttPlugin extends Plugin {
     this.registerDomEvent(ribbonElement, 'contextmenu', (event) => {
       event.preventDefault();
       event.stopPropagation();
+      contextMenuOpen = true;
       this.showRibbonModelMenu(event);
     });
+    this.registerDomEvent(
+      ribbonElement,
+      'mousedown',
+      (event) => {
+        if (event.button === 2) {
+          event.preventDefault();
+          event.stopPropagation();
+        }
+      },
+      true,
+    );
     this.dictationController = new DictationSessionController({
       audioLevelMeter: this.audioLevelMeter,
       captureStream: this.audioCaptureStream,
