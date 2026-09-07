@@ -1045,6 +1045,14 @@ export class DictationSessionController {
     entry: ManagedSession,
     event: TranscriptReadyEvent,
   ): Promise<TranscriptRevision | null> {
+    // FunASR/SenseVoice may surface its silence token as ordinary text. Never
+    // let those markers become transcript or translation units.
+    if (isSilenceMarkerOnly(event.text)) {
+      this.dependencies.logger?.debug('session', 'discarded silence-only transcript', {
+        text: event.text,
+      });
+      return null;
+    }
     const baseRevision = toTranscriptRevision(event, entry.snapshot.timestamps);
 
     // A single-text rewrite cannot be re-attributed across speakers without
@@ -1724,6 +1732,12 @@ export class DictationSessionController {
       this.applyUiState('error');
     }
   }
+}
+
+function isSilenceMarkerOnly(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (normalized.length === 0) return true;
+  return normalized.split(/\s+/u).every((token) => /^\/{1,2}sil(?:ence)?[,.!?]*$/u.test(token));
 }
 
 function createSessionId(): string {
