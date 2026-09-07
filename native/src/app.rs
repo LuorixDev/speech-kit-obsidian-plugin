@@ -2155,12 +2155,13 @@ fn resolve_accelerator(
                 return None;
             };
             match registry.runtime(runtime_id) {
-                Some(runtime) => [
-                    AcceleratorId::Cuda,
-                    AcceleratorId::Metal,
-                    AcceleratorId::DirectMl,
-                    AcceleratorId::Vulkan,
-                ]
+                Some(runtime) => {
+                    let accelerators = if family_id == ModelFamilyId::TencentHyMt {
+                        [AcceleratorId::Vulkan, AcceleratorId::Cuda, AcceleratorId::Metal, AcceleratorId::DirectMl]
+                    } else {
+                        [AcceleratorId::Cuda, AcceleratorId::Metal, AcceleratorId::DirectMl, AcceleratorId::Vulkan]
+                    };
+                    accelerators
                 .into_iter()
                 .find(|accelerator| {
                     runtime
@@ -2169,6 +2170,7 @@ fn resolve_accelerator(
                         .contains(accelerator)
                         && adapter.supports_accelerator_for_model(model_path, *accelerator)
                 }),
+                }
                 None => {
                     // Reaching here means dispatch picked a runtime the registry
                     // did not register — a registration bug, not a runtime state.
