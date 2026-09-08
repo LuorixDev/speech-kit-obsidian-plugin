@@ -887,8 +887,24 @@
 /* --- Batch LLM processing pulse ----------------------------------- */
 
 .local-stt-transcript-provisional {
-  opacity: 0.85;
-  transition: opacity 120ms ease;
+  animation: local-stt-provisional-breathe 2s ease-in-out infinite;
+}
+
+@keyframes local-stt-provisional-breathe {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.95;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .local-stt-transcript-provisional {
+    animation: none;
+    opacity: 0.75;
+  }
 }
 
 .local-stt-session-processing {

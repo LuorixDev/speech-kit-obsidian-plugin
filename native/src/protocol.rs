@@ -565,6 +565,10 @@ pub enum Event {
         session_id: String,
         tier: QueueBackpressureTier,
     },
+    AudioBacklogChanged {
+        queued_audio_ms: u64,
+        session_id: String,
+    },
     ContextRequest {
         budget_chars: u32,
         correlation_id: Uuid,

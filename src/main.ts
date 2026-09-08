@@ -19,6 +19,7 @@ import { DictationSessionController } from './dictation/dictation-session-contro
 import { FinalizedUtteranceAutoCopy } from './dictation/finalized-utterance-auto-copy';
 import { LastUtteranceRecovery } from './dictation/last-utterance-recovery';
 import { dictationAnchorExtension } from './editor/dictation-anchor-extension';
+import { dictationScrollFollowExtension } from './editor/dictation-scroll-follow';
 import { noteSurfaceUpdateListenerExtension } from './editor/note-surface';
 import { provisionalTranscriptExtension } from './editor/provisional-transcript-extension';
 import { RawTranscriptRecovery } from './editor/raw-transcript-recovery';
@@ -185,6 +186,7 @@ export default class LocalSttPlugin extends Plugin {
 
     this.registerEditorExtension(dictationAnchorExtension());
     this.registerEditorExtension(noteSurfaceUpdateListenerExtension());
+    this.registerEditorExtension(dictationScrollFollowExtension);
     this.registerEditorExtension(provisionalTranscriptExtension());
     this.readAloudFollowAlong = new ReadAloudFollowAlong(
       this.app.workspace,
@@ -342,6 +344,10 @@ export default class LocalSttPlugin extends Plugin {
       onRealtimeTranslation: (text, session, metadata) => {
         this.translationController?.translateRealtime(text, session, metadata);
       },
+      onTranscriptionTiming: (event) => this.translationController?.observeTranscriptionTiming(event),
+      onTranscriptionQueue: (sessionId, tier) => this.translationController?.observeTranscriptionQueue(sessionId, tier),
+      onTranscriptionStopped: (sessionId) => this.translationController?.finishTranscription(sessionId),
+      onAudioBacklog: (sessionId, queuedAudioMs) => this.translationController?.observeAudioBacklog(sessionId, queuedAudioMs),
       drainRealtimeTranslation: async (session) => {
         await this.translationController?.drainRealtime(session);
       },

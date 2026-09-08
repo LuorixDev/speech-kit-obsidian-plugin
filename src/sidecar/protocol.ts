@@ -410,6 +410,11 @@ export interface ContextRequestEvent extends EnvelopeBase<'context_request'> {
   utteranceId: UtteranceId;
 }
 
+export interface AudioBacklogChangedEvent extends EnvelopeBase<'audio_backlog_changed'> {
+  queuedAudioMs: number;
+  sessionId: string;
+}
+
 export interface WarningEvent extends EnvelopeBase<'warning'> {
   code: string;
   details?: string;
@@ -430,6 +435,7 @@ export interface ErrorEvent extends EnvelopeBase<'error'> {
 }
 
 export type SidecarEvent =
+  | AudioBacklogChangedEvent
   | AudioLevelEvent
   | ContextRequestEvent
   | ErrorEvent
@@ -682,6 +688,7 @@ const SIDECAR_EVENT_TYPE_FLAGS = {
   synthesis_started: 1,
   transcript_ready: 1,
   transcription_queue_changed: 1,
+  audio_backlog_changed: 1,
   translation_cancelled: 1,
   translation_complete: 1,
   translation_error: 1,

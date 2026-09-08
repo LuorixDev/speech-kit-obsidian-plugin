@@ -10,7 +10,7 @@ const build = resolve(
   process.env.SPEECH_KIT_AUDIOCPP_BUILD || 'native/target/audiocpp-session-build',
 );
 const profile = process.argv.includes('--release') ? 'release' : 'debug';
-const patch = resolve('scripts/patches/audiocpp-session.patch');
+const patches = ['audiocpp-session.patch', 'audiocpp-repetition.patch'].map((name) => resolve('scripts/patches', name));
 function run(command, args, cwd) {
   return execFileSync(command, args, { cwd, stdio: 'inherit' });
 }
@@ -48,11 +48,13 @@ try {
 }
 const actual = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: source, encoding: 'utf8' }).trim();
 if (actual !== revision) throw new Error(`Expected audio.cpp ${revision}, got ${actual}`);
-try {
-  execFileSync('git', ['apply', '--reverse', '--check', patch], { cwd: source, stdio: 'pipe' });
-} catch {
-  run('git', ['apply', '--check', patch], source);
-  run('git', ['apply', patch], source);
+for (const patch of patches) {
+  try {
+    execFileSync('git', ['apply', '--reverse', '--check', patch], { cwd: source, stdio: 'pipe' });
+  } catch {
+    run('git', ['apply', '--check', patch], source);
+    run('git', ['apply', patch], source);
+  }
 }
 run('cmake', [
   '-S',

@@ -7,7 +7,9 @@ import { t } from '../shared/i18n';
 import type { PluginLogger } from '../shared/plugin-logger';
 import type { UserFeedback } from '../shared/user-feedback';
 import type { SidecarConnection } from '../sidecar/sidecar-connection';
+import type { QueueBackpressureTier } from '../sidecar/protocol';
 import { TranslationCancelledError, translateWithBergamot } from './bergamot-client';
+import { AdaptiveRealtimePacing, type TranscriptionTiming } from './adaptive-realtime-pacing';
 import { translateWithHyMt } from './hy-mt-client';
 import {
   findInstalledTranslationModel,
@@ -156,6 +158,61 @@ export class TranslationController {
   private realtimePendingCount = 0;
   private realtimeQueue: RealtimeTranslationSlot[] = [];
   private realtimeActive = false;
+  private readonly realtimePacing = new AdaptiveRealtimePacing();
+  private realtimeCompletedAt = -Infinity;
+  private realtimeWakeTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly transcriptionPressure = new Map<string, QueueBackpressureTier>();
+  private readonly audioPressure = new Set<string>();
+  private realtimeOverloadTimer: ReturnType<typeof setTimeout> | undefined;
+
+  private updateOverloadInterruption(): void {
+    if (this.audioPressure.size === 0) {
+      clearTimeout(this.realtimeOverloadTimer);
+      this.realtimeOverloadTimer = undefined;
+    } else if (this.realtimeActive && this.realtimeOverloadTimer === undefined) {
+      this.realtimeOverloadTimer = setTimeout(() => {
+        this.realtimeOverloadTimer = undefined;
+        if (this.audioPressure.size > 0) this.realtimeAbortController?.abort();
+      }, 1500);
+    }
+  }
+
+  observeAudioBacklog(sessionId: string, queuedAudioMs: number): void {
+    if (this.disposed || !Number.isFinite(queuedAudioMs) || queuedAudioMs < 0) return;
+    // Separate thresholds avoid toggling on every PCM frame.
+    if (queuedAudioMs >= 2000) this.audioPressure.add(sessionId);
+    else if (queuedAudioMs <= 500) this.audioPressure.delete(sessionId);
+    this.updateOverloadInterruption();
+    this.pumpRealtimeQueue();
+  }
+
+  observeTranscriptionQueue(sessionId: string, tier: QueueBackpressureTier): void {
+    if (this.disposed) return;
+    const wasPaused = this.transcriptionPressure.size > 0;
+    if (tier === 'normal') this.transcriptionPressure.delete(sessionId);
+    else this.transcriptionPressure.set(sessionId, tier);
+    if (wasPaused !== (this.transcriptionPressure.size > 0)) {
+      this.dependencies.logger.debug?.('translation',
+        this.transcriptionPressure.size > 0 ? 'translation paused for ASR queue pressure' : 'translation resumed after ASR queue recovery',
+        { sessionId, tier });
+    }
+    this.pumpRealtimeQueue();
+  }
+
+  finishTranscription(sessionId: string): void {
+    this.audioPressure.delete(sessionId);
+    this.updateOverloadInterruption();
+    this.transcriptionPressure.delete(sessionId);
+    this.pumpRealtimeQueue();
+  }
+
+  observeTranscriptionTiming(timing: TranscriptionTiming): void {
+    if (this.disposed) return;
+    const before = this.realtimePacing.delayMs();
+    this.realtimePacing.observe(timing);
+    const delayMs = this.realtimePacing.delayMs();
+    if (delayMs !== before) this.dependencies.logger.debug?.('translation', 'adaptive translation interval changed', { delayMs });
+  }
   private readonly realtimeSlots = new Map<object, Map<string, RealtimeTranslationSlot>>();
   private realtimeLegacyId = 0;
   constructor(private readonly dependencies: TranslationControllerDependencies) {}
@@ -190,6 +247,10 @@ export class TranslationController {
     });
   }
   dispose(): void {
+    clearTimeout(this.realtimeOverloadTimer);
+    clearTimeout(this.realtimeWakeTimer);
+    this.transcriptionPressure.clear();
+    this.audioPressure.clear();
     this.disposed = true;
     this.realtimeGeneration += 1;
     this.realtimeAbortController?.abort();
@@ -270,18 +331,23 @@ export class TranslationController {
       return;
     }
     if (
-      resolvedUpdate.isFinal ||
-      (!slot.latest.update.isFinal && resolvedUpdate.revision >= slot.latest.update.revision)
+      resolvedUpdate.revision >= slot.latest.update.revision &&
+      (!slot.latest.update.isFinal || resolvedUpdate.isFinal) &&
+      !(
+        resolvedUpdate.revision === slot.latest.update.revision &&
+        resolvedUpdate.isFinal === slot.latest.update.isFinal &&
+        text === slot.latest.source
+      )
     ) {
-      const previous = slot.latest;
       slot.latest = { source: text, update: resolvedUpdate };
       // A final revision supersedes any provisional translation immediately.
       // Abort the in-flight request so the single translation worker can move
       // on to the final text instead of spending GPU time on stale partials.
-      if (resolvedUpdate.isFinal && previous !== slot.latest) {
+      if (resolvedUpdate.isFinal) {
         slot.abortController?.abort();
       }
       this.scheduleRealtimeSlot(slot);
+      this.pumpRealtimeQueue();
     }
   }
 
@@ -309,8 +375,20 @@ export class TranslationController {
   private pumpRealtimeQueue(): void {
     if (this.realtimeActive || this.disposed) return;
     const nextIndex = this.realtimeQueue.findIndex((slot) => slot.latest.update.isFinal);
+    clearTimeout(this.realtimeWakeTimer);
+    this.realtimeWakeTimer = undefined;
+    if (this.realtimeQueue.length === 0) return;
+    // Queue pressure is authoritative even when ASR produces no new text and
+    // therefore emits no timing samples. Do not poll or cancel active helpers.
+    if (this.transcriptionPressure.size > 0 || this.audioPressure.size > 0) return;
+    const wait = this.realtimeCompletedAt + this.realtimePacing.delayMs() - performance.now();
+    if (wait > 0) {
+      this.realtimeWakeTimer = setTimeout(() => this.pumpRealtimeQueue(), wait);
+      return;
+    }
     const slot = this.realtimeQueue.splice(nextIndex < 0 ? 0 : nextIndex, 1)[0];
     if (slot === undefined) return;
+    const startedAt = performance.now();
     this.realtimeActive = true;
     void this.processRealtimeSlot(slot)
       .catch((error: unknown) => {
@@ -341,6 +419,10 @@ export class TranslationController {
           this.dependencies.logger.warn('translation', 'realtime translation failed', error);
       })
       .finally(() => {
+        clearTimeout(this.realtimeOverloadTimer);
+        this.realtimeOverloadTimer = undefined;
+        this.realtimePacing.observeTranslation(performance.now() - startedAt);
+        this.realtimeCompletedAt = performance.now();
         this.realtimeActive = false;
         slot.scheduled = false;
         const slots = this.realtimeSlots.get(slot.targetKey);
@@ -367,6 +449,7 @@ export class TranslationController {
 
   private async processRealtimeSlot(slot: RealtimeTranslationSlot): Promise<void> {
     const request = slot.latest;
+    slot.processed = request;
     if (request.source.length === 0) return;
     const settings = this.dependencies.getSettings();
     const configuration = realtimeConfigurationKey(settings);
@@ -402,14 +485,15 @@ export class TranslationController {
       // Cancellation means a newer revision must be retried. Other failures
       // are handled by the bounded final-revision retry logic in the pump.
       if (!cancelled) slot.processed = request;
+      else if (slot.processed === request) delete slot.processed;
       throw error;
     }
     const stillCurrent = slot.latest === request;
-    // Never publish a stale snapshot. Under load, an older partial can finish
-    // after several newer revisions and inserting it would create delayed,
-    // out-of-order translation blocks. The completion handler will enqueue
-    // the latest snapshot immediately.
-    const canPublish = stillCurrent;
+    // Completed partials remain useful previews until finalization. The session
+    // mailbox owns their placement; the next pass consumes the newest source.
+    const canPublish =
+      !abortController.signal.aborted &&
+      (stillCurrent || (!request.update.isFinal && !slot.latest.update.isFinal));
     if (
       this.disposed ||
       slot.generation !== this.realtimeGeneration ||
@@ -421,10 +505,19 @@ export class TranslationController {
     }
     if (canPublish) {
       const inserted =
-        request.update.utteranceId.length > 0 &&
-        slot.target.replaceUtteranceTranslation !== undefined
-          ? slot.target.replaceUtteranceTranslation(request.update.utteranceId, result.text.trim())
-          : slot.target.insertAdjacentToSessionRange(`> ${result.text.trim()}`, 'below');
+        slot.target.queueUtteranceTranslation !== undefined
+          ? await slot.target.queueUtteranceTranslation(
+              request.update.utteranceId,
+              result.text.trim(),
+              request.update,
+            )
+          : request.update.utteranceId.length > 0 &&
+              slot.target.replaceUtteranceTranslation !== undefined
+            ? slot.target.replaceUtteranceTranslation(
+                request.update.utteranceId,
+                result.text.trim(),
+              )
+            : slot.target.insertAdjacentToSessionRange(`> ${result.text.trim()}`, 'below');
       if (!inserted) {
         throw new Error(
           `Realtime translation could not be written for ${request.update.utteranceId}.`,
@@ -672,6 +765,11 @@ export class TranslationController {
 }
 
 export interface RealtimeTranslationTarget {
+  queueUtteranceTranslation?(
+    utteranceId: string,
+    text: string,
+    update: RealtimeTranslationUpdate,
+  ): Promise<boolean>;
   insertAdjacentToSessionRange(blockText: string, placement: 'above' | 'below'): boolean;
   replaceUtteranceTranslation?(utteranceId: string, translationText: string): boolean;
 }

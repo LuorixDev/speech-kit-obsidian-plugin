@@ -715,6 +715,11 @@ describe('event parsing', () => {
     },
   );
 
+  it('parses audio backlog independently of sentence count', () => {
+    expect(parseEventFrame(JSON.stringify({ type: 'audio_backlog_changed', sessionId: 's', queuedAudioMs: 12000 })))
+      .toEqual({ type: 'audio_backlog_changed', sessionId: 's', queuedAudioMs: 12000 });
+  });
+
   it('parses session_stopped with the queue_overload reason', () => {
     expect(
       parseEventFrame(

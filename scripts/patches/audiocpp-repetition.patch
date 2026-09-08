@@ -1,0 +1,30 @@
+diff --git a/src/models/fun_asr_nano/decoder.cpp b/src/models/fun_asr_nano/decoder.cpp
+--- a/src/models/fun_asr_nano/decoder.cpp
++++ b/src/models/fun_asr_nano/decoder.cpp
+@@ -702,6 +702,26 @@
+         break;
+       }
+       out.token_ids.push_back(token);
++      // Stop degenerate token cycles during decoding, not after spending the
++      // full token budget. Ordinary one- or two-time repetitions are retained.
++      bool repeating = false;
++      const size_t count = out.token_ids.size();
++      for (size_t width = 1; width <= 64 && width * 6 <= count; ++width) {
++        const size_t start = count - width * 6;
++        bool equal = true;
++        for (size_t i = start + width; i < count; ++i) {
++          if (out.token_ids[i] != out.token_ids[start + (i - start) % width]) {
++            equal = false;
++            break;
++          }
++        }
++        if (equal) {
++          out.token_ids.resize(start + width * 2);
++          repeating = true;
++          break;
++        }
++      }
++      if (repeating) break;
+       if (token_callback) {
+         token_callback(out);
+       }

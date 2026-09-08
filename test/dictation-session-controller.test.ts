@@ -664,6 +664,22 @@ describe('DictationSessionController', () => {
     expect(setRibbonBufferLength).toHaveBeenCalledWith(3);
   });
 
+  it('shows audio backlog seconds even with zero queued sentences and ignores stale count updates', async () => {
+    const setRibbonBufferLength = vi.fn();
+    const sidecarConnection = new FakeSidecarConnection();
+    const controller = createController({ setRibbonBufferLength, sidecarConnection });
+    await controller.startDictation();
+    const sessionId = sidecarConnection.startSession.mock.calls[0]?.[0].sessionId ?? '';
+    setRibbonBufferLength.mockClear();
+    sidecarConnection.emit({ type: 'audio_backlog_changed', sessionId, queuedAudioMs: 12400 });
+    sidecarConnection.emit({ type: 'transcription_queue_changed', sessionId, queuedUtterances: 0, tier: 'normal' });
+    expect(setRibbonBufferLength).toHaveBeenCalledExactlyOnceWith(13);
+    sidecarConnection.emit({ type: 'audio_backlog_changed', sessionId, queuedAudioMs: 0 });
+    expect(setRibbonBufferLength).toHaveBeenLastCalledWith(0);
+    await controller.stopDictation();
+    sidecarConnection.emit({ reason: 'user_stop', sessionId, type: 'session_stopped' });
+  });
+
   it('surfaces the bare microphone-permission message when capture is denied, without the generic start-failure prefix', async () => {
     const captureStream = new FakeCaptureStream();
     captureStream.start.mockRejectedValueOnce(

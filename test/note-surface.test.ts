@@ -133,7 +133,10 @@ function append(
   utteranceId: string,
   text: string,
   options: TranscriptRenderOptions = renderOptions(),
-  input: { pauseMsBeforeUtterance?: number | null; utteranceStartMsInSession?: number } = {},
+  input: {
+    pauseMsBeforeUtterance?: number | null;
+    utteranceStartMsInSession?: number;
+  } = {},
 ): ReturnType<NoteSurface['appendProjection']> {
   return appendWithRenderer(surface, new TranscriptRenderer(options), utteranceId, text, input);
 }
@@ -156,7 +159,10 @@ function appendWithRenderer(
   renderer: TranscriptRenderer,
   utteranceId: string,
   text: string,
-  input: { pauseMsBeforeUtterance?: number | null; utteranceStartMsInSession?: number } = {},
+  input: {
+    pauseMsBeforeUtterance?: number | null;
+    utteranceStartMsInSession?: number;
+  } = {},
 ): ReturnType<NoteSurface['appendProjection']> {
   const projection = renderer.planAppend(
     {
@@ -269,7 +275,9 @@ describe('NoteSurface', () => {
   });
 
   it('removes a withdrawn transcript and translation and rejects late translations', () => {
-    const { surface, view } = createSurface({ extensions: noteSurfaceUpdateListenerExtension() });
+    const { surface, view } = createSurface({
+      extensions: noteSurfaceUpdateListenerExtension(),
+    });
     view.addUpdateListener((update) => surface.observeTransaction(update));
     surface.appendProjection('u1', literalProjection('temporary'));
     surface.replaceUtteranceCompanion('u1', '> Temporary translation');
@@ -281,7 +289,9 @@ describe('NoteSurface', () => {
   });
 
   it('preserves a user-edited translation when its transcript is withdrawn', () => {
-    const { surface, view } = createSurface({ extensions: noteSurfaceUpdateListenerExtension() });
+    const { surface, view } = createSurface({
+      extensions: noteSurfaceUpdateListenerExtension(),
+    });
     view.addUpdateListener((update) => surface.observeTransaction(update));
     surface.appendProjection('u1', literalProjection('temporary'));
     surface.replaceUtteranceCompanion('u1', '> Translation');
@@ -303,8 +313,28 @@ describe('NoteSurface', () => {
     expect(doc(view)).toBe('第一句。\n\n> First sentence.\n\n第二句。');
   });
 
+  it('places delayed translations beside their source and finalizes their decoration', () => {
+    const { surface, view } = createSurface({
+      extensions: provisionalTranscriptExtension(),
+    });
+    view.addUpdateListener((update) => surface.observeTransaction(update));
+    surface.appendProjection('u1', literalProjection('First.'));
+    surface.appendProjection('u2', literalProjection('Second.'));
+    surface.appendProjection('u3', literalProjection('Third.'));
+    expect(surface.replaceUtteranceCompanion('u1', '> Preview', true)).toBe(true);
+    expect(doc(view)).toBe('First.\n\n> Preview\n\nSecond.Third.');
+    expect(view.state.field(provisionalTranscriptStateField).has('translation:u1')).toBe(true);
+    expect(surface.replaceUtteranceCompanion('u1', '> Final', false)).toBe(true);
+    expect(doc(view)).toBe('First.\n\n> Final\n\nSecond.Third.');
+    expect(surface.replaceAnchor('u2', 'Second corrected.', 'Second.').kind).toBe('replaced');
+    expect(doc(view)).toBe('First.\n\n> Final\n\nSecond corrected.Third.');
+    expect(view.state.field(provisionalTranscriptStateField).has('translation:u1')).toBe(false);
+  });
+
   it('replaces a provisional translation in place before appending the next utterance', () => {
-    const { surface, view } = createSurface({ extensions: noteSurfaceUpdateListenerExtension() });
+    const { surface, view } = createSurface({
+      extensions: noteSurfaceUpdateListenerExtension(),
+    });
     view.addUpdateListener((update) => surface.observeTransaction(update));
 
     expect(surface.appendProjection('u1', literalProjection('partial')).kind).toBe('appended');
@@ -317,7 +347,9 @@ describe('NoteSurface', () => {
   });
 
   it('updates an earlier translation after the next utterance and its translation arrive', () => {
-    const { surface, view } = createSurface({ extensions: noteSurfaceUpdateListenerExtension() });
+    const { surface, view } = createSurface({
+      extensions: noteSurfaceUpdateListenerExtension(),
+    });
     view.addUpdateListener((update) => surface.observeTransaction(update));
     surface.appendProjection('u1', literalProjection('partial'));
     surface.replaceUtteranceCompanion('u1', '> Early');
@@ -370,12 +402,19 @@ describe('NoteSurface', () => {
       selectionHead: initialDocument.length,
     });
     expect(surface.appendProjection('u1', literalProjection('y'.repeat(34))).kind).toBe('appended');
-    let replacementState = EditorState.create({ doc: externalReplacement, extensions });
+    let replacementState = EditorState.create({
+      doc: externalReplacement,
+      extensions,
+    });
     replacementState = replacementState.update({
       effects: [
         setAnchorEffect.of(100),
         setAnchorModeEffect.of('visible'),
-        setProvisionalTranscriptEffect.of({ from: 0, to: 1, utteranceId: 'u1' }),
+        setProvisionalTranscriptEffect.of({
+          from: 0,
+          to: 1,
+          utteranceId: 'u1',
+        }),
         setSessionProcessingEffect.of({ from: 0, to: 1 }),
       ],
     }).state;
@@ -383,7 +422,10 @@ describe('NoteSurface', () => {
     const failure = surface.validateExternalModification();
 
     expect(surface.dispose()).toEqual(failure);
-    expect(view.state.field(dictationAnchorStateField)).toEqual({ mode: 'hidden', pos: null });
+    expect(view.state.field(dictationAnchorStateField)).toEqual({
+      mode: 'hidden',
+      pos: null,
+    });
     expect(view.state.field(provisionalTranscriptStateField).size).toBe(0);
     expect(view.state.field(sessionProcessingStateField)).toBeNull();
     expect(doc(view)).toBe(externalReplacement);
@@ -391,8 +433,12 @@ describe('NoteSurface', () => {
 
   it('keeps same-cursor sessions ordered when the later session writes first', () => {
     const view = new FakeEditorView('', 0);
-    const earlier = new NoteSurface(view as unknown as EditorView, { anchor: 'at_cursor' });
-    const later = new NoteSurface(view as unknown as EditorView, { anchor: 'at_cursor' });
+    const earlier = new NoteSurface(view as unknown as EditorView, {
+      anchor: 'at_cursor',
+    });
+    const later = new NoteSurface(view as unknown as EditorView, {
+      anchor: 'at_cursor',
+    });
 
     expect(append(later, 'later', 'B').kind).toBe('appended');
     if (view.lastUpdate === null) {
@@ -450,7 +496,10 @@ describe('NoteSurface', () => {
   });
 
   it('appends dictated text at the writing-region tail after user text typed at the old anchor', () => {
-    const { surface, view } = createSurface({ doc: 'start ', selectionHead: 6 });
+    const { surface, view } = createSurface({
+      doc: 'start ',
+      selectionHead: 6,
+    });
 
     expect(append(surface, 'u1', 'first').kind).toBe('appended');
     surface.observeTransaction(
@@ -497,7 +546,10 @@ describe('NoteSurface', () => {
   });
 
   it('removes an empty finalized utterance together with its boundary and timestamp prefix', () => {
-    const { surface, view } = createSurface({ doc: 'Existing', selectionHead: 8 });
+    const { surface, view } = createSurface({
+      doc: 'Existing',
+      selectionHead: 8,
+    });
     const renderer = new TranscriptRenderer({
       timestamps: timestamps({ enabled: true, header: false }),
       transcriptFormatting: 'space',
@@ -515,7 +567,10 @@ describe('NoteSurface', () => {
   });
 
   it('keeps the boundary and timestamp prefix when an empty partial clears the body', () => {
-    const { surface, view } = createSurface({ doc: 'Existing', selectionHead: 8 });
+    const { surface, view } = createSurface({
+      doc: 'Existing',
+      selectionHead: 8,
+    });
     const renderer = new TranscriptRenderer({
       timestamps: timestamps({ enabled: true, header: false }),
       transcriptFormatting: 'space',
@@ -535,7 +590,9 @@ describe('NoteSurface', () => {
   });
 
   it('applies provisional styling and clears it on final replacement', () => {
-    const { surface, view } = createSurface({ extensions: provisionalTranscriptExtension() });
+    const { surface, view } = createSurface({
+      extensions: provisionalTranscriptExtension(),
+    });
 
     expect(append(surface, 'u1', 'live words').kind).toBe('appended');
     surface.setProvisional('u1', true);
@@ -547,7 +604,9 @@ describe('NoteSurface', () => {
   });
 
   it('clears provisional styling on a user edit and session teardown', () => {
-    const { surface, view } = createSurface({ extensions: provisionalTranscriptExtension() });
+    const { surface, view } = createSurface({
+      extensions: provisionalTranscriptExtension(),
+    });
 
     expect(append(surface, 'u1', 'live words').kind).toBe('appended');
     surface.setProvisional('u1', true);
@@ -606,8 +665,12 @@ describe('NoteSurface', () => {
 
   it('lets only the newest session drive the shared cursor and clears it on the last dispose', () => {
     const view = new FakeEditorView('', 0, dictationAnchorExtension());
-    const earlier = new NoteSurface(view as unknown as EditorView, { anchor: 'at_cursor' });
-    const later = new NoteSurface(view as unknown as EditorView, { anchor: 'at_cursor' });
+    const earlier = new NoteSurface(view as unknown as EditorView, {
+      anchor: 'at_cursor',
+    });
+    const later = new NoteSurface(view as unknown as EditorView, {
+      anchor: 'at_cursor',
+    });
 
     // The older (non-owner) session cannot move the shared cursor.
     earlier.setAnchorMode('visible');
@@ -623,22 +686,39 @@ describe('NoteSurface', () => {
 
     // The last session to dispose clears it.
     later.dispose();
-    expect(view.state.field(dictationAnchorStateField)).toEqual({ mode: 'hidden', pos: null });
+    expect(view.state.field(dictationAnchorStateField)).toEqual({
+      mode: 'hidden',
+      pos: null,
+    });
   });
 
   it('keeps the visible anchor marker on the locked note surface', () => {
-    const { surface, view } = createSurface({ extensions: dictationAnchorExtension() });
+    const { surface, view } = createSurface({
+      extensions: dictationAnchorExtension(),
+    });
 
-    expect(view.state.field(dictationAnchorStateField)).toEqual({ mode: 'hidden', pos: 0 });
+    expect(view.state.field(dictationAnchorStateField)).toEqual({
+      mode: 'hidden',
+      pos: 0,
+    });
 
     surface.setAnchorMode('visible');
-    expect(view.state.field(dictationAnchorStateField)).toEqual({ mode: 'visible', pos: 0 });
+    expect(view.state.field(dictationAnchorStateField)).toEqual({
+      mode: 'visible',
+      pos: 0,
+    });
 
     append(surface, 'u1', 'first');
-    expect(view.state.field(dictationAnchorStateField)).toEqual({ mode: 'visible', pos: 5 });
+    expect(view.state.field(dictationAnchorStateField)).toEqual({
+      mode: 'visible',
+      pos: 5,
+    });
 
     surface.dispose();
-    expect(view.state.field(dictationAnchorStateField)).toEqual({ mode: 'hidden', pos: null });
+    expect(view.state.field(dictationAnchorStateField)).toEqual({
+      mode: 'hidden',
+      pos: null,
+    });
   });
 
   it('applies and trims the eager end-of-note first phrase prefix', () => {
@@ -839,7 +919,10 @@ describe('NoteSurface', () => {
 
   describe('readNoteGlossary', () => {
     it('returns null for non-positive budget', () => {
-      const { surface } = createSurface({ doc: 'NVIDIA CUDA', selectionHead: 11 });
+      const { surface } = createSurface({
+        doc: 'NVIDIA CUDA',
+        selectionHead: 11,
+      });
 
       expect(surface.readNoteGlossary(0)).toBeNull();
       expect(surface.readNoteGlossary(-5)).toBeNull();
@@ -932,7 +1015,10 @@ describe('NoteSurface', () => {
     });
 
     it('scans the whole note, including text after the writing tail', () => {
-      const { surface, view } = createSurface({ doc: 'NVIDIA ', selectionHead: 7 });
+      const { surface, view } = createSurface({
+        doc: 'NVIDIA ',
+        selectionHead: 7,
+      });
 
       view.dispatch({ changes: { from: 7, insert: 'after CUDA' } });
 

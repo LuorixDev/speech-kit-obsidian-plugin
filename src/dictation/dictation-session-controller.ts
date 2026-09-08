@@ -161,6 +161,10 @@ interface DictationSessionControllerDependencies {
     session: ControllerSession,
     metadata: { isFinal: boolean; revision: number; utteranceId: string },
   ) => void;
+  onTranscriptionTiming?: (event: TranscriptReadyEvent) => void;
+  onTranscriptionQueue?: (sessionId: string, tier: QueueBackpressureTier) => void;
+  onAudioBacklog?: (sessionId: string, queuedAudioMs: number) => void;
+  onTranscriptionStopped?: (sessionId: string) => void;
   drainRealtimeTranslation?: (session: ControllerSession) => Promise<void>;
   onRawTranscriptRecoveryAvailable?: (receipt: RawTranscriptRecoveryReceipt) => void;
   onModelMissing?: () => void;
@@ -735,6 +739,8 @@ export class DictationSessionController {
   }
 
   private disposeLocalSession(sessionId: string): void {
+    this.audioBacklogSessions.delete(sessionId);
+    this.dependencies.onTranscriptionStopped?.(sessionId);
     const entry = this.sessions.get(sessionId);
     if (entry === undefined) {
       return;
@@ -821,6 +827,10 @@ export class DictationSessionController {
         this.handleQueueTierChange(event);
         return;
 
+      case 'audio_backlog_changed':
+        this.handleAudioBacklog(event);
+        return;
+
       case 'context_request':
         this.handleContextRequest(event);
         return;
@@ -867,18 +877,36 @@ export class DictationSessionController {
     event: Extract<SidecarEvent, { type: 'transcription_queue_changed' }>,
   ): void {
     const entry = this.sessions.get(event.sessionId);
-    if (entry === undefined) {
+    if (entry === undefined || entry.phase === 'stopped' || rejectsTranscriptWork(entry)) {
       return;
     }
 
+    this.dependencies.onTranscriptionQueue?.(event.sessionId, event.tier);
+
     if (event.sessionId === this.activeSessionId) {
       this.dependencies.setRibbonQueueTier(event.tier);
-      this.dependencies.setRibbonBufferLength(event.queuedUtterances);
+      if (!this.audioBacklogSessions.has(event.sessionId)) {
+        this.dependencies.setRibbonBufferLength(event.queuedUtterances);
+      }
     }
   }
 
   private resetQueueTier(): void {
     this.dependencies.setRibbonQueueTier('normal');
+  }
+
+  private readonly audioBacklogSessions = new Set<string>();
+
+  private handleAudioBacklog(event: Extract<SidecarEvent, { type: 'audio_backlog_changed' }>): void {
+    const entry = this.sessions.get(event.sessionId);
+    if (!entry || entry.phase === 'stopped' || rejectsTranscriptWork(entry)) return;
+    if (!Number.isFinite(event.queuedAudioMs) || event.queuedAudioMs < 0) return;
+    this.audioBacklogSessions.add(event.sessionId);
+    this.dependencies.onAudioBacklog?.(event.sessionId, event.queuedAudioMs);
+    if (event.sessionId === this.activeSessionId) {
+      this.dependencies.setRibbonBufferLength(Math.ceil(event.queuedAudioMs / 1000));
+    }
+    this.dependencies.logger?.debug('session', 'audio backlog updated', { queuedAudioMs: event.queuedAudioMs });
   }
 
   private handleContextRequest(event: ContextRequestEvent): void {
@@ -957,6 +985,9 @@ export class DictationSessionController {
     entry: ManagedSession,
     event: TranscriptReadyEvent,
   ): Promise<void> {
+    if (event.sessionId === this.activeSessionId) {
+      this.dependencies.onTranscriptionTiming?.(event);
+    }
     if (event.isFinal && event.text.length > 0) {
       this.dependencies.logger?.debug(
         'session',
@@ -1217,6 +1248,8 @@ export class DictationSessionController {
     if (entry.phase === 'stopped') {
       return;
     }
+
+    this.dependencies.onTranscriptionStopped?.(event.sessionId);
 
     this.dependencies.logger?.debug(
       'session',

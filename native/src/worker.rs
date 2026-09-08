@@ -77,6 +77,11 @@ pub enum WorkerCommand {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum WorkerEvent {
+    AudioProcessed {
+        session_id: String,
+        utterance_id: Uuid,
+        samples: usize,
+    },
     SessionError {
         code: String,
         details: Option<String>,
@@ -230,6 +235,26 @@ fn load_session_resources(
     })
 }
 
+// Merge adjacent audio only, preserving every sample and command boundary.
+fn coalesce_stream_audio(
+    mut command: WorkerCommand,
+    receiver: &Receiver<WorkerCommand>,
+    pending: &mut Option<WorkerCommand>,
+) -> WorkerCommand {
+    if let WorkerCommand::StreamAudio { samples, session_id, utterance_id } = &mut command {
+        while let Ok(next) = receiver.try_recv() {
+            match next {
+                WorkerCommand::StreamAudio { samples: more, session_id: next_session, utterance_id: next_id }
+                    if next_session == *session_id && next_id == *utterance_id && samples.len() < 16_000 * 30 => {
+                        samples.extend(more);
+                    }
+                other => { *pending = Some(other); break; }
+            }
+        }
+    }
+    command
+}
+
 fn worker_main(
     command_rx: Receiver<WorkerCommand>,
     event_tx: Sender<WorkerEvent>,
@@ -242,7 +267,9 @@ fn worker_main(
         .expect("worker tokio runtime should build");
     let worker_started_at = Instant::now();
 
-    while let Ok(command) = command_rx.recv() {
+    let mut pending = None;
+    while let Some(command) = pending.take().or_else(|| command_rx.recv().ok()) {
+        let command = coalesce_stream_audio(command, &command_rx, &mut pending);
         match command {
             WorkerCommand::BeginStreamingUtterance {
                 session_id,
@@ -371,10 +398,22 @@ fn worker_main(
                             utterance_id,
                             &samples,
                             now_ms,
+                            matches!(&pending,
+                                Some(WorkerCommand::FinalizeStreamingUtterance { session_id: next_session, utterance_id: next_id, .. })
+                                | Some(WorkerCommand::StreamAudio { session_id: next_session, utterance_id: next_id, .. })
+                                if next_session == &session_id && next_id == &utterance_id),
                         )
                     }));
                     match result {
-                        Ok(Ok(())) => {}
+                        Ok(Ok(())) => {
+                            if let SessionModel::Streaming { utterance: Some(open), .. } = &session.model {
+                                let _ = event_tx.send(WorkerEvent::AudioProcessed {
+                                    session_id: session_id.clone(),
+                                    utterance_id: open.utterance_id,
+                                    samples: open.utterance.samples.len(),
+                                });
+                            }
+                        }
                         Ok(Err(error)) => {
                             send_worker_error(
                                 &event_tx,
@@ -614,6 +653,7 @@ fn stream_audio(
     utterance_id: Uuid,
     samples: &[i16],
     now_ms: u64,
+    skip_preview: bool,
 ) -> Result<(), TranscriptionError> {
     let started_at = Instant::now();
     let SessionModel::Streaming {
@@ -635,6 +675,7 @@ fn stream_audio(
     model.accept_audio(samples)?;
     open.utterance.samples.extend_from_slice(samples);
     open.cadence.observe(samples.len());
+    if skip_preview { return Ok(()); }
     if !open.cadence.take_if_due(now_ms) {
         return Ok(());
     }
@@ -1207,6 +1248,7 @@ mod tests {
                     utterance_id,
                     &frame,
                     ((index + 1) * 20) as u64,
+                    false,
                 )
                 .unwrap();
             } else {
@@ -1231,7 +1273,7 @@ mod tests {
             .iter()
             .filter_map(|event| match event {
                 WorkerEvent::TranscriptReady { transcript, .. } => Some(transcript),
-                WorkerEvent::SessionError { .. } => None,
+                WorkerEvent::SessionError { .. } | WorkerEvent::AudioProcessed { .. } => None,
             })
             .collect();
         assert!(transcripts.len() >= 3);
@@ -1264,7 +1306,7 @@ mod tests {
                     assert!(!transcript.stage_history[0].is_final);
                     Some(*utterance_duration_ms)
                 }
-                WorkerEvent::SessionError { .. } => None,
+                WorkerEvent::SessionError { .. } | WorkerEvent::AudioProcessed { .. } => None,
             })
             .collect();
         assert!(
@@ -1502,6 +1544,59 @@ mod tests {
             vad_probabilities: Vec::new(),
             voice_activity: voice_activity(),
         }
+    }
+
+    #[test]
+    fn coalescing_preserves_pcm_and_stops_at_finalization() {
+        let (tx, rx) = mpsc::channel();
+        let id = Uuid::new_v4();
+        let make = |samples| WorkerCommand::StreamAudio { session_id: "s".into(), utterance_id: id, samples };
+        tx.send(make(vec![3, 4])).unwrap();
+        tx.send(WorkerCommand::FinalizeStreamingUtterance {
+            session_id: "s".into(), utterance_id: id, utterance: finalized_utterance_fixture(vec![1, 2, 3, 4]),
+        }).unwrap();
+        tx.send(make(vec![5])).unwrap();
+        let mut pending = None;
+        let command = super::coalesce_stream_audio(make(vec![1, 2]), &rx, &mut pending);
+        assert!(matches!(command, WorkerCommand::StreamAudio { samples, .. } if samples == vec![1, 2, 3, 4]));
+        assert!(matches!(pending, Some(WorkerCommand::FinalizeStreamingUtterance { .. })));
+        assert!(matches!(rx.try_recv().unwrap(), WorkerCommand::StreamAudio { samples, .. } if samples == vec![5]));
+    }
+
+    #[test]
+    fn coalescing_never_merges_different_utterances() {
+        let (tx, rx) = mpsc::channel();
+        let a = Uuid::new_v4();
+        let b = Uuid::new_v4();
+        tx.send(WorkerCommand::StreamAudio { session_id: "s".into(), utterance_id: b, samples: vec![2] }).unwrap();
+        let mut pending = None;
+        let merged = super::coalesce_stream_audio(WorkerCommand::StreamAudio {
+            session_id: "s".into(), utterance_id: a, samples: vec![1],
+        }, &rx, &mut pending);
+        assert!(matches!(merged, WorkerCommand::StreamAudio { samples, .. } if samples == vec![1]));
+        assert!(matches!(pending, Some(WorkerCommand::StreamAudio { utterance_id, .. }) if utterance_id == b));
+    }
+
+    #[test]
+    fn audio_progress_is_reported_without_new_transcript_text() {
+        let (commands, events, handle) = spawn_test_worker(panic_streaming_registry(None, false));
+        let id = Uuid::new_v4();
+        commands.send(WorkerCommand::BeginSession(streaming_session_metadata("progress"))).unwrap();
+        commands.send(WorkerCommand::BeginStreamingUtterance {
+            session_id: "progress".into(), utterance: live_utterance_fixture(), utterance_id: id,
+        }).unwrap();
+        for _ in 0..3 {
+            commands.send(WorkerCommand::StreamAudio {
+                session_id: "progress".into(), utterance_id: id, samples: vec![0; 320],
+            }).unwrap();
+        }
+        commands.send(WorkerCommand::Shutdown).unwrap();
+        handle.join().unwrap();
+        let progress: Vec<_> = events.try_iter().filter_map(|event| match event {
+            WorkerEvent::AudioProcessed { samples, .. } => Some(samples), _ => None,
+        }).collect();
+        assert_eq!(progress.last(), Some(&1280));
+        assert!(progress.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     fn finalized_utterance_fixture(samples: Vec<i16>) -> FinalizedUtterance {
@@ -1873,6 +1968,7 @@ mod tests {
                     utterance_id,
                     &frame,
                     ((index + 1) * 20) as u64,
+                    false,
                 )
                 .unwrap();
             } else {

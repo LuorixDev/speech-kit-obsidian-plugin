@@ -123,6 +123,7 @@ export type RewriteResult =
     };
 
 const noteSurfaceInsertOrder = Annotation.define<number>();
+const noteSurfaceCompanionWrite = Annotation.define<boolean>();
 const noteSurfacesByView = new WeakMap<EditorView, Set<NoteSurface>>();
 let nextSurfaceOrder = 0;
 
@@ -182,7 +183,9 @@ export class NoteSurface {
     // shared cursor.
     registerNoteSurface(this);
     if (this.isAnchorOwner()) {
-      this.view.dispatch({ effects: setAnchorEffect.of(this.initialAnchorPos) });
+      this.view.dispatch({
+        effects: setAnchorEffect.of(this.initialAnchorPos),
+      });
     }
   }
 
@@ -232,12 +235,17 @@ export class NoteSurface {
         changeIntersectsSpan(update, before)
       ) {
         current.latched = 'user_edited';
+        this.clearProvisional([`translation:${current.utteranceId}`]);
       }
     }
     return null;
   }
 
-  replaceUtteranceCompanion(utteranceId: UtteranceId, blockText: string): boolean {
+  replaceUtteranceCompanion(
+    utteranceId: UtteranceId,
+    blockText: string,
+    provisional = false,
+  ): boolean {
     if (this.disposed) return false;
     if (this.detectDesynchronization() !== null) return false;
     const source = this.spans.get(utteranceId);
@@ -258,8 +266,8 @@ export class NoteSurface {
     const start = existing?.start ?? source.end;
     const end = existing?.end ?? start;
     this.view.dispatch({
+      annotations: noteSurfaceCompanionWrite.of(true),
       changes: { from: start, to: end, insert: rendered },
-      effects: this.ownerAnchorEffects(start + rendered.length),
     });
     const currentSource = this.spans.get(utteranceId);
     if (currentSource !== undefined) currentSource.end = start;
@@ -272,6 +280,19 @@ export class NoteSurface {
       projectedText: rendered,
       start,
       utteranceId,
+    });
+    const translationKey = `translation:${utteranceId}`;
+    this.view.dispatch({
+      effects: [
+        ...this.ownerAnchorEffects(this.writingRegionTail()),
+        provisional
+          ? setProvisionalTranscriptEffect.of({
+              from: start + 2,
+              to: start + rendered.length - 2,
+              utteranceId: translationKey,
+            })
+          : clearProvisionalTranscriptEffect.of([translationKey]),
+      ],
     });
     this.pendingInitialPrefix = '';
     return true;
@@ -297,7 +318,11 @@ export class NoteSurface {
     }
 
     if (this.spans.has(utteranceId)) {
-      return { kind: 'denied', reason: { kind: 'already_projected' }, utteranceId };
+      return {
+        kind: 'denied',
+        reason: { kind: 'already_projected' },
+        utteranceId,
+      };
     }
 
     const from = this.writingRegionTail();
@@ -595,7 +620,10 @@ export class NoteSurface {
     if (desynchronization === null) {
       this.trimPendingInitialPrefix();
     }
-    const provisionalUtteranceIds = [...this.spans.keys()];
+    const provisionalUtteranceIds = [
+      ...this.spans.keys(),
+      ...[...this.companionSpans.keys()].map((id) => `translation:${id}`),
+    ];
     this.companionSpans.clear();
     this.disposed = true;
     unregisterNoteSurface(this);
@@ -639,7 +667,9 @@ export class NoteSurface {
 
   private clearProvisional(utteranceIds: readonly UtteranceId[]): void {
     if (utteranceIds.length > 0) {
-      this.view.dispatch({ effects: clearProvisionalTranscriptEffect.of(utteranceIds) });
+      this.view.dispatch({
+        effects: clearProvisionalTranscriptEffect.of(utteranceIds),
+      });
     }
   }
 
@@ -827,10 +857,14 @@ export class NoteSurface {
   }
 
   private mapSpans(update: ViewUpdate): void {
+    const companionWrite = update.transactions.some((transaction) =>
+      transaction.annotation(noteSurfaceCompanionWrite),
+    );
     const insertOrder = update.transactions
       .map((transaction) => transaction.annotation(noteSurfaceInsertOrder))
       .find((order) => order !== undefined);
-    const spanStartBias = insertOrder !== undefined && insertOrder < this.createdAt ? 1 : -1;
+    const spanStartBias =
+      companionWrite || (insertOrder !== undefined && insertOrder < this.createdAt) ? 1 : -1;
     const initialAnchorBias = insertOrder !== undefined && insertOrder > this.createdAt ? -1 : 1;
 
     for (const span of this.spans.values()) {
@@ -839,7 +873,10 @@ export class NoteSurface {
       // Text bias: insertions at textEnd land outside the span, so a sibling
       // append at writingRegionTail() doesn't swallow the next utterance.
       span.textEnd = update.changes.mapPos(span.textEnd, -1);
-      span.end = update.changes.mapPos(span.end, 1);
+      span.end = update.changes.mapPos(
+        span.end,
+        insertOrder === undefined && !companionWrite ? 1 : -1,
+      );
     }
     for (const companion of this.companionSpans.values()) {
       companion.start = update.changes.mapPos(companion.start, 1);

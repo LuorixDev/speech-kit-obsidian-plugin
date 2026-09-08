@@ -814,7 +814,7 @@ fn suppress_repeated_tail(text: &str) -> String {
 
     for start in 0..chars.len() {
         let remaining = chars.len() - start;
-        for unit_len in 1..=8 {
+        for unit_len in 1..=64 {
             if remaining < unit_len * 6 || !remaining.is_multiple_of(unit_len) {
                 continue;
             }

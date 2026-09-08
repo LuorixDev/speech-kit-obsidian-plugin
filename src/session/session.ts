@@ -1,4 +1,5 @@
 import type { EditorView } from '@codemirror/view';
+import { TranslationResultPool, type TranslationResultUpdate } from './translation-result-pool';
 import type { App, Editor, EventRef, TAbstractFile, TFile } from 'obsidian';
 import type { DictationAnchorMode } from '../editor/dictation-anchor-extension';
 import {
@@ -103,7 +104,11 @@ interface NoteSurfaceLike {
     expectedOldText: string,
     removeBoundary?: boolean,
   ): ReplaceResult;
-  replaceUtteranceCompanion(utteranceId: UtteranceId, blockText: string): boolean;
+  replaceUtteranceCompanion(
+    utteranceId: UtteranceId,
+    blockText: string,
+    provisional?: boolean,
+  ): boolean;
   rewriteRegion(
     range: RewriteRange,
     newText: string,
@@ -131,8 +136,31 @@ export class Session {
   private readonly projectionByUtterance = new Map<string, ProjectionState>();
   private readonly rawSessionEntries: RawSessionEntry[] = [];
   private readonly rawSessionEntryIndexByUtterance = new Map<UtteranceId, number>();
-  private readonly refs: Array<{ offref: (ref: EventRef) => void; ref: EventRef }> = [];
+  private readonly refs: Array<{
+    offref: (ref: EventRef) => void;
+    ref: EventRef;
+  }> = [];
   private surface: NoteSurfaceLike | null;
+  private readonly translationResults = new TranslationResultPool(
+    (id, text, provisional) =>
+      this.surface?.replaceUtteranceCompanion(
+        id,
+        text
+          .trim()
+          .split('\n')
+          .map((line) => `> ${line}`)
+          .join('\n'),
+        provisional,
+      ) ?? false,
+  );
+
+  queueUtteranceTranslation(
+    id: string,
+    text: string,
+    update: TranslationResultUpdate,
+  ): Promise<boolean> {
+    return this.translationResults.enqueue(id, text, update);
+  }
   private surfaceDesynchronized = false;
 
   static hasDictationTarget(app: Pick<App, 'workspace'>): boolean {
@@ -284,7 +312,9 @@ export class Session {
     const result = this.surface.rewriteRegion(
       range,
       replacement,
-      this.rawSessionEntries.map((entry) => ({ utteranceId: entry.utteranceId })),
+      this.rawSessionEntries.map((entry) => ({
+        utteranceId: entry.utteranceId,
+      })),
     );
 
     if (result.kind === 'denied' && result.reason.kind === 'surface_desynchronized') {
@@ -335,7 +365,9 @@ export class Session {
     const result = this.surface.rewriteRegion(
       range,
       replacement,
-      this.rawSessionEntries.map((entry) => ({ utteranceId: entry.utteranceId })),
+      this.rawSessionEntries.map((entry) => ({
+        utteranceId: entry.utteranceId,
+      })),
     );
 
     if (result.kind === 'denied' && result.reason.kind === 'surface_desynchronized') {
@@ -393,6 +425,7 @@ export class Session {
   }
 
   dispose(): void {
+    this.translationResults.dispose();
     this.journal.finalize();
     this.surface?.dispose();
     this.surface = null;
@@ -411,7 +444,9 @@ export class Session {
       return;
     }
 
-    const state = this.projectionByUtterance.get(revision.utteranceId) ?? { kind: 'unprojected' };
+    const state = this.projectionByUtterance.get(revision.utteranceId) ?? {
+      kind: 'unprojected',
+    };
 
     if (state.kind === 'latched' || state.kind === 'denied') {
       return;

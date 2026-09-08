@@ -76,6 +76,8 @@ pub struct AppState {
 }
 
 struct ActiveSession {
+    audio_backlog: crate::audio_backlog::AudioBacklog,
+    last_reported_audio_backlog_ms: u64,
     audio_mixer: AudioMixer,
     context_required: bool,
     context_budget_chars: u32,
@@ -941,6 +943,8 @@ impl AppState {
                                 draining: false,
                                 drain_reason: None,
                                 last_reported_queue_tier: QueueBackpressureTier::Normal,
+                                audio_backlog: crate::audio_backlog::AudioBacklog::default(),
+                                last_reported_audio_backlog_ms: u64::MAX,
                                 last_reported_state: None,
                                 last_reported_audio_level_at: None,
                                 overload_draining: false,
@@ -1280,6 +1284,11 @@ impl AppState {
             }
         };
 
+        let audio_work = match &command {
+            WorkerCommand::StreamAudio { samples, utterance_id, .. } => (*utterance_id, samples.len(), true),
+            WorkerCommand::BeginStreamingUtterance { utterance, utterance_id, .. } => (*utterance_id, utterance.samples.len(), false),
+            _ => unreachable!(),
+        };
         if self.transcription_worker.send(command).is_err() {
             events.push(Event::Error {
                 code: "internal_error".to_string(),
@@ -1291,6 +1300,8 @@ impl AppState {
                 active_session.streaming_open = None;
                 advance_transcription_queue(active_session);
             }
+        } else {
+            active_session.audio_backlog.receive(audio_work.0, audio_work.1, audio_work.2);
         }
         emit_queue_tier_if_changed(active_session, events);
     }
@@ -1365,7 +1376,7 @@ impl AppState {
                     let Some(active_session) = self.active_sessions.get_mut(&session_id) else {
                         return;
                     };
-
+                    if let Some(id) = utterance_id { active_session.audio_backlog.finish(id); }
                     advance_transcription_queue(active_session);
                     emit_queue_tier_if_changed(active_session, events);
                 }
@@ -1382,6 +1393,12 @@ impl AppState {
                 }
 
                 self.emit_state_if_changed(&session_id, events);
+            }
+            WorkerEvent::AudioProcessed { session_id, utterance_id, samples } => {
+                if let Some(active) = self.active_sessions.get_mut(&session_id) {
+                    active.audio_backlog.acknowledge(utterance_id, samples);
+                    emit_queue_tier_if_changed(active, events);
+                }
             }
             WorkerEvent::TranscriptReady {
                 pause_ms_before_utterance,
@@ -1401,6 +1418,7 @@ impl AppState {
                         return;
                     };
 
+                    active_session.audio_backlog.finish(transcript.utterance_id);
                     advance_transcription_queue(active_session);
                     emit_queue_tier_if_changed(active_session, events);
                 }
@@ -1478,6 +1496,7 @@ impl AppState {
         if active_session.streaming {
             let open = active_session.streaming_open.take();
             let utterance_id = open.map_or_else(Uuid::new_v4, |open| open.utterance_id);
+            active_session.audio_backlog.receive(utterance_id, utterance.samples.len(), false);
             if open.is_none() {
                 mark_transcription_enqueued(active_session);
             }
@@ -1489,6 +1508,7 @@ impl AppState {
                         utterance_id,
                     });
             if send_result.is_err() {
+                active_session.audio_backlog.finish(utterance_id);
                 events.push(Event::Error {
                     code: "internal_error".to_string(),
                     details: None,
@@ -1504,6 +1524,7 @@ impl AppState {
 
         let utterance_id = Uuid::new_v4();
         let correlation_id = Uuid::new_v4();
+        active_session.audio_backlog.receive(utterance_id, utterance.samples.len(), false);
         let deadline = Instant::now() + CONTEXT_REQUEST_TIMEOUT;
 
         mark_transcription_enqueued(active_session);
@@ -1968,6 +1989,15 @@ fn queue_backpressure_tier(queued_utterances: usize) -> QueueBackpressureTier {
 }
 
 fn emit_queue_tier_if_changed(active_session: &mut ActiveSession, events: &mut Vec<Event>) {
+    let queued_audio_ms = active_session.audio_backlog.queued_ms();
+    let previous = active_session.last_reported_audio_backlog_ms;
+    if queued_audio_ms.abs_diff(previous) >= 250 || (queued_audio_ms == 0 && previous != 0) {
+        active_session.last_reported_audio_backlog_ms = queued_audio_ms;
+        events.push(Event::AudioBacklogChanged {
+            queued_audio_ms,
+            session_id: active_session.session.config().session_id.clone(),
+        });
+    }
     let tier = queue_backpressure_tier(active_session.queued_utterances);
     if active_session.last_reported_queue_tier == tier {
         return;
@@ -3285,6 +3315,8 @@ mod tests {
         let mut events = Vec::new();
         app.enqueue_utterance("session-1", fake_utterance(), &mut events);
 
+        assert!(events.iter().any(|event| matches!(event, Event::AudioBacklogChanged { .. })));
+        events.retain(|event| matches!(event, Event::ContextRequest { .. }));
         assert_eq!(events.len(), 1, "expected exactly one ContextRequest event");
         let (correlation_id, utterance_id) = match &events[0] {
             Event::ContextRequest {
@@ -3327,7 +3359,7 @@ mod tests {
         let mut events = Vec::new();
         app.enqueue_utterance("session-1", fake_utterance(), &mut events);
 
-        assert!(events.is_empty(), "no context_request should be emitted");
+        assert!(events.iter().all(|event| matches!(event, Event::AudioBacklogChanged { .. })), "only audio progress should be emitted");
         let active = app
             .active_sessions
             .get("session-1")
@@ -3559,6 +3591,25 @@ mod tests {
                 )
             })
             .count()
+    }
+
+    #[test]
+    fn audio_backlog_emits_without_sentence_tier_changes() {
+        let path = create_model_file();
+        let mut app = test_app();
+        let _ = app.handle_command(start_session_command("audio-progress", &path));
+        let active = app.active_sessions.get_mut("audio-progress").unwrap();
+        let id = Uuid::new_v4();
+        active.audio_backlog.receive(id, 160_000, false);
+        let mut events = Vec::new();
+        super::emit_queue_tier_if_changed(active, &mut events);
+        assert_eq!(active.queued_utterances, 0);
+        assert!(events.iter().any(|event| matches!(event, Event::AudioBacklogChanged { queued_audio_ms: 10000, .. })));
+        events.clear();
+        app.handle_worker_event(WorkerEvent::AudioProcessed {
+            session_id: "audio-progress".into(), utterance_id: id, samples: 160_000,
+        }, &mut events);
+        assert!(events.iter().any(|event| matches!(event, Event::AudioBacklogChanged { queued_audio_ms: 0, .. })));
     }
 
     fn enqueue_n_utterances(app: &mut AppState, n: usize) -> Vec<Event> {
