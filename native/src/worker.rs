@@ -104,6 +104,13 @@ pub enum WorkerEvent {
     },
 }
 
+// A long coalesced batch makes an overloaded live recognizer appear frozen:
+// it cannot acknowledge or display anything until it has consumed the whole
+// batch.  Two seconds is enough to amortize message overhead while still
+// letting the worker catch up promptly.  When another batch is waiting, the
+// worker feeds it without decoding an obsolete draft.
+const MAX_COALESCED_STREAM_AUDIO_SAMPLES: usize = 16_000 * 2;
+
 pub struct TranscriptionWorker {
     command_tx: Sender<WorkerCommand>,
     event_rx: Receiver<WorkerEvent>,
@@ -205,8 +212,14 @@ impl PartialCadence {
         }
 
         self.samples_since_decode = 0;
-        self.last_decode_wall_ms = now_ms;
         true
+    }
+
+    /// Start the next cooldown only after inference has completed.  Otherwise
+    /// a slow decode consumes its own cooldown and immediately triggers the
+    /// next decode, permanently starving queued microphone audio.
+    fn complete_decode(&mut self, now_ms: u64) {
+        self.last_decode_wall_ms = now_ms;
     }
 }
 
@@ -241,14 +254,37 @@ fn coalesce_stream_audio(
     receiver: &Receiver<WorkerCommand>,
     pending: &mut Option<WorkerCommand>,
 ) -> WorkerCommand {
-    if let WorkerCommand::StreamAudio { samples, session_id, utterance_id } = &mut command {
+    if let WorkerCommand::StreamAudio {
+        samples,
+        session_id,
+        utterance_id,
+    } = &mut command
+    {
         while let Ok(next) = receiver.try_recv() {
             match next {
-                WorkerCommand::StreamAudio { samples: more, session_id: next_session, utterance_id: next_id }
-                    if next_session == *session_id && next_id == *utterance_id && samples.len() < 16_000 * 30 => {
-                        samples.extend(more);
-                    }
-                other => { *pending = Some(other); break; }
+                WorkerCommand::StreamAudio {
+                    samples: more,
+                    session_id: next_session,
+                    utterance_id: next_id,
+                } if next_session == *session_id
+                    && next_id == *utterance_id
+                    && samples.len() < MAX_COALESCED_STREAM_AUDIO_SAMPLES =>
+                {
+                    samples.extend(more);
+                }
+                other => {
+                    *pending = Some(other);
+                    break;
+                }
+            }
+        }
+
+        // If the cap stopped merging, peek one command into `pending`.  The
+        // caller uses it to skip an already-stale preview before immediately
+        // continuing to ingest the queued audio.
+        if samples.len() >= MAX_COALESCED_STREAM_AUDIO_SAMPLES && pending.is_none() {
+            if let Ok(next) = receiver.try_recv() {
+                *pending = Some(next);
             }
         }
     }
@@ -406,7 +442,11 @@ fn worker_main(
                     }));
                     match result {
                         Ok(Ok(())) => {
-                            if let SessionModel::Streaming { utterance: Some(open), .. } = &session.model {
+                            if let SessionModel::Streaming {
+                                utterance: Some(open),
+                                ..
+                            } = &session.model
+                            {
                                 let _ = event_tx.send(WorkerEvent::AudioProcessed {
                                     session_id: session_id.clone(),
                                     utterance_id: open.utterance_id,
@@ -675,7 +715,9 @@ fn stream_audio(
     model.accept_audio(samples)?;
     open.utterance.samples.extend_from_slice(samples);
     open.cadence.observe(samples.len());
-    if skip_preview { return Ok(()); }
+    if skip_preview {
+        return Ok(());
+    }
     if !open.cadence.take_if_due(now_ms) {
         return Ok(());
     }
@@ -683,6 +725,8 @@ fn stream_audio(
     let engine_started_at = Instant::now();
     let engine_output = model.partial()?;
     let engine_duration_ms = engine_started_at.elapsed().as_millis() as u64;
+    open.cadence
+        .complete_decode(now_ms.saturating_add(engine_duration_ms));
     let text = joined_engine_text(&engine_output);
     if text == open.last_emitted_text {
         return Ok(());
@@ -1550,17 +1594,31 @@ mod tests {
     fn coalescing_preserves_pcm_and_stops_at_finalization() {
         let (tx, rx) = mpsc::channel();
         let id = Uuid::new_v4();
-        let make = |samples| WorkerCommand::StreamAudio { session_id: "s".into(), utterance_id: id, samples };
+        let make = |samples| WorkerCommand::StreamAudio {
+            session_id: "s".into(),
+            utterance_id: id,
+            samples,
+        };
         tx.send(make(vec![3, 4])).unwrap();
         tx.send(WorkerCommand::FinalizeStreamingUtterance {
-            session_id: "s".into(), utterance_id: id, utterance: finalized_utterance_fixture(vec![1, 2, 3, 4]),
-        }).unwrap();
+            session_id: "s".into(),
+            utterance_id: id,
+            utterance: finalized_utterance_fixture(vec![1, 2, 3, 4]),
+        })
+        .unwrap();
         tx.send(make(vec![5])).unwrap();
         let mut pending = None;
         let command = super::coalesce_stream_audio(make(vec![1, 2]), &rx, &mut pending);
-        assert!(matches!(command, WorkerCommand::StreamAudio { samples, .. } if samples == vec![1, 2, 3, 4]));
-        assert!(matches!(pending, Some(WorkerCommand::FinalizeStreamingUtterance { .. })));
-        assert!(matches!(rx.try_recv().unwrap(), WorkerCommand::StreamAudio { samples, .. } if samples == vec![5]));
+        assert!(
+            matches!(command, WorkerCommand::StreamAudio { samples, .. } if samples == vec![1, 2, 3, 4])
+        );
+        assert!(matches!(
+            pending,
+            Some(WorkerCommand::FinalizeStreamingUtterance { .. })
+        ));
+        assert!(
+            matches!(rx.try_recv().unwrap(), WorkerCommand::StreamAudio { samples, .. } if samples == vec![5])
+        );
     }
 
     #[test]
@@ -1568,33 +1626,90 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let a = Uuid::new_v4();
         let b = Uuid::new_v4();
-        tx.send(WorkerCommand::StreamAudio { session_id: "s".into(), utterance_id: b, samples: vec![2] }).unwrap();
+        tx.send(WorkerCommand::StreamAudio {
+            session_id: "s".into(),
+            utterance_id: b,
+            samples: vec![2],
+        })
+        .unwrap();
         let mut pending = None;
-        let merged = super::coalesce_stream_audio(WorkerCommand::StreamAudio {
-            session_id: "s".into(), utterance_id: a, samples: vec![1],
-        }, &rx, &mut pending);
+        let merged = super::coalesce_stream_audio(
+            WorkerCommand::StreamAudio {
+                session_id: "s".into(),
+                utterance_id: a,
+                samples: vec![1],
+            },
+            &rx,
+            &mut pending,
+        );
         assert!(matches!(merged, WorkerCommand::StreamAudio { samples, .. } if samples == vec![1]));
-        assert!(matches!(pending, Some(WorkerCommand::StreamAudio { utterance_id, .. }) if utterance_id == b));
+        assert!(
+            matches!(pending, Some(WorkerCommand::StreamAudio { utterance_id, .. }) if utterance_id == b)
+        );
+    }
+
+    #[test]
+    fn coalescing_caps_live_audio_and_marks_remaining_audio_pending() {
+        let (tx, rx) = mpsc::channel();
+        let id = Uuid::new_v4();
+        tx.send(WorkerCommand::StreamAudio {
+            session_id: "s".into(),
+            utterance_id: id,
+            samples: vec![2; 320],
+        })
+        .unwrap();
+        let mut pending = None;
+        let merged = super::coalesce_stream_audio(
+            WorkerCommand::StreamAudio {
+                session_id: "s".into(),
+                utterance_id: id,
+                samples: vec![1; super::MAX_COALESCED_STREAM_AUDIO_SAMPLES],
+            },
+            &rx,
+            &mut pending,
+        );
+        assert!(
+            matches!(merged, WorkerCommand::StreamAudio { samples, .. } if samples.len() == super::MAX_COALESCED_STREAM_AUDIO_SAMPLES)
+        );
+        assert!(
+            matches!(pending, Some(WorkerCommand::StreamAudio { samples, .. }) if samples == vec![2; 320])
+        );
     }
 
     #[test]
     fn audio_progress_is_reported_without_new_transcript_text() {
         let (commands, events, handle) = spawn_test_worker(panic_streaming_registry(None, false));
         let id = Uuid::new_v4();
-        commands.send(WorkerCommand::BeginSession(streaming_session_metadata("progress"))).unwrap();
-        commands.send(WorkerCommand::BeginStreamingUtterance {
-            session_id: "progress".into(), utterance: live_utterance_fixture(), utterance_id: id,
-        }).unwrap();
+        commands
+            .send(WorkerCommand::BeginSession(streaming_session_metadata(
+                "progress",
+            )))
+            .unwrap();
+        commands
+            .send(WorkerCommand::BeginStreamingUtterance {
+                session_id: "progress".into(),
+                utterance: live_utterance_fixture(),
+                utterance_id: id,
+            })
+            .unwrap();
         for _ in 0..3 {
-            commands.send(WorkerCommand::StreamAudio {
-                session_id: "progress".into(), utterance_id: id, samples: vec![0; 320],
-            }).unwrap();
+            commands
+                .send(WorkerCommand::StreamAudio {
+                    session_id: "progress".into(),
+                    utterance_id: id,
+                    samples: vec![0; 320],
+                })
+                .unwrap();
         }
         commands.send(WorkerCommand::Shutdown).unwrap();
         handle.join().unwrap();
-        let progress: Vec<_> = events.try_iter().filter_map(|event| match event {
-            WorkerEvent::AudioProcessed { samples, .. } => Some(samples), _ => None,
-        }).collect();
+        let progress: Vec<_> = events
+            .try_iter()
+            .filter_map(|event| match event {
+                WorkerEvent::AudioProcessed { samples, .. } => Some(samples),
+                _ => None,
+            })
+            .collect();
         assert_eq!(progress.last(), Some(&1280));
         assert!(progress.windows(2).all(|pair| pair[0] < pair[1]));
     }
