@@ -29,6 +29,20 @@ function makeUserPreset(overrides: Partial<LlmPreset> & { id: string }): LlmPres
 }
 
 describe('resolvePluginSettings', () => {
+  it('defaults sentence-by-sentence translation off and accepts its persisted value', () => {
+    expect(resolvePluginSettings({}).finalizedSentenceTranslationEnabled).toBe(false);
+    expect(
+      resolvePluginSettings({ finalizedSentenceTranslationEnabled: true })
+        .finalizedSentenceTranslationEnabled,
+    ).toBe(true);
+    expect(
+      resolvePluginSettings({
+        finalizedSentenceTranslationEnabled: true,
+        realtimeTranslationEnabled: true,
+      }).realtimeTranslationEnabled,
+    ).toBe(false);
+  });
+
   it('returns defaults when persisted data is missing', () => {
     expect(resolvePluginSettings(undefined)).toEqual(DEFAULT_PLUGIN_SETTINGS);
   });

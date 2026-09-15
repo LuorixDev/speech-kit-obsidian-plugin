@@ -203,6 +203,7 @@ export interface PluginSettings {
   translationSourceLanguage: TranslationLanguage | null;
   translationTargetLanguage: TranslationLanguage | null;
   realtimeTranslationEnabled: boolean;
+  finalizedSentenceTranslationEnabled: boolean;
   forceContinuousTranscription: boolean;
   transcriptFormatting: TranscriptFormattingMode;
   highlightSpokenText: boolean;
@@ -272,6 +273,7 @@ export const DEFAULT_PLUGIN_SETTINGS: PluginSettings = {
   translationSourceLanguage: null,
   translationTargetLanguage: null,
   realtimeTranslationEnabled: false,
+  finalizedSentenceTranslationEnabled: false,
   forceContinuousTranscription: false,
   transcriptFormatting: 'smart',
   highlightSpokenText: true,
@@ -452,9 +454,14 @@ export function resolvePluginSettings(data: unknown): PluginSettings {
     ),
     translationSourceLanguage: normalizeTranslationLanguage(raw.translationSourceLanguage),
     translationTargetLanguage: normalizeTranslationLanguage(raw.translationTargetLanguage),
-    realtimeTranslationEnabled: readBoolean(
-      raw.realtimeTranslationEnabled,
-      DEFAULT_PLUGIN_SETTINGS.realtimeTranslationEnabled,
+    realtimeTranslationEnabled:
+      readBoolean(
+        raw.realtimeTranslationEnabled,
+        DEFAULT_PLUGIN_SETTINGS.realtimeTranslationEnabled,
+      ) && !readBoolean(raw.finalizedSentenceTranslationEnabled, false),
+    finalizedSentenceTranslationEnabled: readBoolean(
+      raw.finalizedSentenceTranslationEnabled,
+      DEFAULT_PLUGIN_SETTINGS.finalizedSentenceTranslationEnabled,
     ),
     forceContinuousTranscription: readBoolean(
       raw.forceContinuousTranscription,

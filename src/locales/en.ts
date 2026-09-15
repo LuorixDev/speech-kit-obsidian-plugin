@@ -65,7 +65,10 @@ export const en = {
   'audioFile.transcriptLabel': 'Transcript',
   'settings.translation.realtime.name': 'Real-time translation',
   'settings.translation.realtime.desc':
-    'Translate each stable finalized sentence and place the translation below it.',
+    'Continuously update the translation while you speak, then replace it with a final translation.',
+  'settings.translation.sentence.name': 'Sentence-by-sentence translation',
+  'settings.translation.sentence.desc':
+    'Translate only after a sentence is finalized. Uses much less sustained GPU power than real-time translation.',
   'settings.dictation.forceContinuous.name': 'Force continuous transcription',
   'settings.dictation.forceContinuous.desc':
     'Start capturing without waiting for the speech-volume threshold. Silence still separates utterances.',

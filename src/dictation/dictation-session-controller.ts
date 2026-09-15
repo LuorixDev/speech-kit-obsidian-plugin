@@ -897,7 +897,9 @@ export class DictationSessionController {
 
   private readonly audioBacklogSessions = new Set<string>();
 
-  private handleAudioBacklog(event: Extract<SidecarEvent, { type: 'audio_backlog_changed' }>): void {
+  private handleAudioBacklog(
+    event: Extract<SidecarEvent, { type: 'audio_backlog_changed' }>,
+  ): void {
     const entry = this.sessions.get(event.sessionId);
     if (!entry || entry.phase === 'stopped' || rejectsTranscriptWork(entry)) return;
     if (!Number.isFinite(event.queuedAudioMs) || event.queuedAudioMs < 0) return;
@@ -906,7 +908,9 @@ export class DictationSessionController {
     if (event.sessionId === this.activeSessionId) {
       this.dependencies.setRibbonBufferLength(Math.ceil(event.queuedAudioMs / 1000));
     }
-    this.dependencies.logger?.debug('session', 'audio backlog updated', { queuedAudioMs: event.queuedAudioMs });
+    this.dependencies.logger?.debug('session', 'audio backlog updated', {
+      queuedAudioMs: event.queuedAudioMs,
+    });
   }
 
   private handleContextRequest(event: ContextRequestEvent): void {
@@ -1064,11 +1068,17 @@ export class DictationSessionController {
       if (revision.isFinal && revision.text.trim().length > 0) {
         this.dependencies.onFinalizedUtteranceAccepted?.(revision.text);
       }
-      this.dependencies.onRealtimeTranslation?.(revision.text, entry.session, {
-        isFinal: revision.isFinal,
-        revision: revision.revision,
-        utteranceId: revision.utteranceId,
-      });
+      const translationSettings = this.dependencies.getSettings();
+      if (
+        translationSettings.realtimeTranslationEnabled ||
+        (translationSettings.finalizedSentenceTranslationEnabled && revision.isFinal)
+      ) {
+        this.dependencies.onRealtimeTranslation?.(revision.text, entry.session, {
+          isFinal: revision.isFinal,
+          revision: revision.revision,
+          utteranceId: revision.utteranceId,
+        });
+      }
     }
   }
 

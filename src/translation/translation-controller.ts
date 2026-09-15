@@ -191,10 +191,14 @@ export class TranslationController {
     const wasPaused = this.transcriptionPressure.size > 0;
     if (tier === 'normal') this.transcriptionPressure.delete(sessionId);
     else this.transcriptionPressure.set(sessionId, tier);
-    if (wasPaused !== (this.transcriptionPressure.size > 0)) {
-      this.dependencies.logger.debug?.('translation',
-        this.transcriptionPressure.size > 0 ? 'translation paused for ASR queue pressure' : 'translation resumed after ASR queue recovery',
-        { sessionId, tier });
+    if (wasPaused !== this.transcriptionPressure.size > 0) {
+      this.dependencies.logger.debug?.(
+        'translation',
+        this.transcriptionPressure.size > 0
+          ? 'translation paused for ASR queue pressure'
+          : 'translation resumed after ASR queue recovery',
+        { sessionId, tier },
+      );
     }
     this.pumpRealtimeQueue();
   }
@@ -211,7 +215,10 @@ export class TranslationController {
     const before = this.realtimePacing.delayMs();
     this.realtimePacing.observe(timing);
     const delayMs = this.realtimePacing.delayMs();
-    if (delayMs !== before) this.dependencies.logger.debug?.('translation', 'adaptive translation interval changed', { delayMs });
+    if (delayMs !== before)
+      this.dependencies.logger.debug?.('translation', 'adaptive translation interval changed', {
+        delayMs,
+      });
   }
   private readonly realtimeSlots = new Map<object, Map<string, RealtimeTranslationSlot>>();
   private realtimeLegacyId = 0;
@@ -273,6 +280,12 @@ export class TranslationController {
   ): void {
     const text = source.trim();
     if (this.disposed) return;
+    const settings = this.dependencies.getSettings();
+    if (
+      !settings.realtimeTranslationEnabled &&
+      !(settings.finalizedSentenceTranslationEnabled && update?.isFinal)
+    )
+      return;
     if (text.length === 0) {
       if (update?.isFinal) {
         const slot = this.realtimeSlots.get(target)?.get(update.utteranceId);
@@ -453,7 +466,10 @@ export class TranslationController {
     if (request.source.length === 0) return;
     const settings = this.dependencies.getSettings();
     const configuration = realtimeConfigurationKey(settings);
-    if (!settings.realtimeTranslationEnabled) {
+    if (
+      !settings.realtimeTranslationEnabled &&
+      !(settings.finalizedSentenceTranslationEnabled && request.update.isFinal)
+    ) {
       slot.processed = request;
       return;
     }
@@ -807,6 +823,7 @@ function createTranslationId(): string {
 function realtimeConfigurationKey(settings: PluginSettings): string {
   return JSON.stringify([
     settings.realtimeTranslationEnabled,
+    settings.finalizedSentenceTranslationEnabled,
     settings.selectedTranslationModel,
     settings.translationSourceLanguage,
     settings.translationTargetLanguage,

@@ -478,7 +478,26 @@ export class LocalSttSettingTab extends PluginSettingTab {
     realtimeTranslationSetting.addToggle((toggle) => {
       toggle.setValue(settings.realtimeTranslationEnabled);
       toggle.onChange(async (value) => {
-        await this.access.persistOne('realtimeTranslationEnabled', value);
+        await this.dependencies.saveSettings({
+          ...this.dependencies.getSettings(),
+          realtimeTranslationEnabled: value,
+          ...(value ? { finalizedSentenceTranslationEnabled: false } : {}),
+        });
+        this.refreshSettingsTab();
+      });
+    });
+    const sentenceTranslationSetting = new Setting(translationSection)
+      .setName(t('settings.translation.sentence.name'))
+      .setDesc(t('settings.translation.sentence.desc'));
+    sentenceTranslationSetting.addToggle((toggle) => {
+      toggle.setValue(settings.finalizedSentenceTranslationEnabled);
+      toggle.onChange(async (value) => {
+        await this.dependencies.saveSettings({
+          ...this.dependencies.getSettings(),
+          finalizedSentenceTranslationEnabled: value,
+          ...(value ? { realtimeTranslationEnabled: false } : {}),
+        });
+        this.refreshSettingsTab();
       });
     });
 

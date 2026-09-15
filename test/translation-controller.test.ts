@@ -16,6 +16,58 @@ describe('TranslationController', () => {
     vi.unstubAllGlobals();
   });
 
+  it('translates only the finalized revision in sentence-by-sentence mode', async () => {
+    const controller = new TranslationController({
+      app: {} as never,
+      canReadAloud: () => false,
+      feedback: { show: vi.fn() },
+      getSettings: () => ({
+        ...DEFAULT_PLUGIN_SETTINGS,
+        finalizedSentenceTranslationEnabled: true,
+      }),
+      logger: { warn: vi.fn() } as never,
+      modelManager: { getState: () => ({ catalog: { models: [] }, installedModels: [] }) } as never,
+      onReadAloud: vi.fn(),
+      openModelPicker: vi.fn(),
+      saveSettings: vi.fn(),
+    });
+    const run = vi
+      .spyOn(
+        controller as unknown as {
+          runTranslation(source: string): Promise<{
+            kind: 'translated';
+            text: string;
+            sourceUnitsKept: number;
+          }>;
+        },
+        'runTranslation',
+      )
+      .mockImplementation(async (text) => ({ kind: 'translated', text, sourceUnitsKept: 0 }));
+    const target = {
+      insertAdjacentToSessionRange: vi.fn(() => true),
+      replaceUtteranceTranslation: vi.fn(() => true),
+    };
+    controller.translateRealtime('draft words', target, {
+      isFinal: false,
+      revision: 0,
+      utteranceId: 'u1',
+    });
+    await Promise.resolve();
+    expect(run).not.toHaveBeenCalled();
+    controller.translateRealtime('complete sentence', target, {
+      isFinal: true,
+      revision: 1,
+      utteranceId: 'u1',
+    });
+    await controller.drainRealtime(target);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe('complete sentence');
+    expect(target.replaceUtteranceTranslation).toHaveBeenCalledExactlyOnceWith(
+      'u1',
+      'complete sentence',
+    );
+  });
+
   it('coalesces drafts and prioritizes finals without bypassing ASR pressure pacing', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const controller = new TranslationController({
@@ -25,28 +77,65 @@ describe('TranslationController', () => {
       getSettings: () => ({ ...DEFAULT_PLUGIN_SETTINGS, realtimeTranslationEnabled: true }),
       logger: { warn: vi.fn() } as never,
       modelManager: { getState: () => ({ catalog: { models: [] }, installedModels: [] }) } as never,
-      onReadAloud: vi.fn(), openModelPicker: vi.fn(), saveSettings: vi.fn(),
+      onReadAloud: vi.fn(),
+      openModelPicker: vi.fn(),
+      saveSettings: vi.fn(),
     });
-    const run = vi.spyOn(controller as unknown as {
-      runTranslation(source: string): Promise<{ kind: 'translated'; text: string; sourceUnitsKept: number }>;
-    }, 'runTranslation').mockImplementation(async (text) => ({ kind: 'translated', text, sourceUnitsKept: 0 }));
+    const run = vi
+      .spyOn(
+        controller as unknown as {
+          runTranslation(
+            source: string,
+          ): Promise<{ kind: 'translated'; text: string; sourceUnitsKept: number }>;
+        },
+        'runTranslation',
+      )
+      .mockImplementation(async (text) => ({ kind: 'translated', text, sourceUnitsKept: 0 }));
     for (let revision = 0; revision <= 5; revision++) {
-      controller.observeTranscriptionTiming({ sessionId: 's', utteranceId: 'audio', revision,
-        processingDurationMs: 2000, utteranceDurationMs: (revision + 1) * 2000 });
+      controller.observeTranscriptionTiming({
+        sessionId: 's',
+        utteranceId: 'audio',
+        revision,
+        processingDurationMs: 2000,
+        utteranceDurationMs: (revision + 1) * 2000,
+      });
       if (revision < 5) await vi.advanceTimersByTimeAsync(2000);
     }
-    const target = { insertAdjacentToSessionRange: vi.fn(() => true), replaceUtteranceTranslation: vi.fn(() => true) };
-    controller.translateRealtime('first', target, { utteranceId: 'u', revision: 0, isFinal: false });
+    const target = {
+      insertAdjacentToSessionRange: vi.fn(() => true),
+      replaceUtteranceTranslation: vi.fn(() => true),
+    };
+    controller.translateRealtime('first', target, {
+      utteranceId: 'u',
+      revision: 0,
+      isFinal: false,
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(run).toHaveBeenCalledTimes(1);
-    controller.translateRealtime('second', target, { utteranceId: 'u', revision: 1, isFinal: false });
-    controller.translateRealtime('latest', target, { utteranceId: 'u', revision: 2, isFinal: false });
+    controller.translateRealtime('second', target, {
+      utteranceId: 'u',
+      revision: 1,
+      isFinal: false,
+    });
+    controller.translateRealtime('latest', target, {
+      utteranceId: 'u',
+      revision: 2,
+      isFinal: false,
+    });
     await vi.advanceTimersByTimeAsync(99);
     expect(run).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(run.mock.calls[1]?.[0]).toBe('latest');
-    controller.translateRealtime('pending', target, { utteranceId: 'u', revision: 3, isFinal: false });
-    controller.translateRealtime('complete sentence', target, { utteranceId: 'u', revision: 4, isFinal: true });
+    controller.translateRealtime('pending', target, {
+      utteranceId: 'u',
+      revision: 3,
+      isFinal: false,
+    });
+    controller.translateRealtime('complete sentence', target, {
+      utteranceId: 'u',
+      revision: 4,
+      isFinal: true,
+    });
     await vi.advanceTimersByTimeAsync(0);
     expect(run).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(100);
@@ -56,66 +145,112 @@ describe('TranslationController', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(['queue recovery', 'session stopped', 'audio recovery'])('holds even final translations until %s', async (recovery) => {
-    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
-    const controller = new TranslationController({
-      app: {} as never, canReadAloud: () => false, feedback: { show: vi.fn() },
-      getSettings: () => ({ ...DEFAULT_PLUGIN_SETTINGS, realtimeTranslationEnabled: true }),
-      logger: { warn: vi.fn() } as never,
-      modelManager: { getState: () => ({ catalog: { models: [] }, installedModels: [] }) } as never,
-      onReadAloud: vi.fn(), openModelPicker: vi.fn(), saveSettings: vi.fn(),
-    });
-    const run = vi.spyOn(controller as unknown as {
-      runTranslation(source: string): Promise<{ kind: 'translated'; text: string; sourceUnitsKept: number }>;
-    }, 'runTranslation').mockImplementation(async (text) => ({ kind: 'translated', text, sourceUnitsKept: 0 }));
-    const target = { insertAdjacentToSessionRange: vi.fn(() => true), replaceUtteranceTranslation: vi.fn(() => true) };
-    controller.observeTranscriptionQueue('s', 'catching_up');
-    if (recovery === 'audio recovery') {
-      controller.observeTranscriptionQueue('s', 'normal');
-      controller.observeAudioBacklog('s', 12_000);
-    }
-    controller.observeTranscriptionQueue('other', 'falling_behind');
-    controller.translateRealtime('draft', target, { utteranceId: 'u', revision: 0, isFinal: false });
-    controller.translateRealtime('final', target, { utteranceId: 'u', revision: 1, isFinal: true });
-    const done = vi.fn();
-    const drain = controller.drainRealtime(target).then(done);
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(run).not.toHaveBeenCalled();
-    expect(done).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-    controller.finishTranscription('other');
-    expect(run).not.toHaveBeenCalled();
-    if (recovery === 'audio recovery') {
-      controller.observeAudioBacklog('s', 1000);
+  it.each(['queue recovery', 'session stopped', 'audio recovery'])(
+    'holds even final translations until %s',
+    async (recovery) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+      const controller = new TranslationController({
+        app: {} as never,
+        canReadAloud: () => false,
+        feedback: { show: vi.fn() },
+        getSettings: () => ({ ...DEFAULT_PLUGIN_SETTINGS, realtimeTranslationEnabled: true }),
+        logger: { warn: vi.fn() } as never,
+        modelManager: {
+          getState: () => ({ catalog: { models: [] }, installedModels: [] }),
+        } as never,
+        onReadAloud: vi.fn(),
+        openModelPicker: vi.fn(),
+        saveSettings: vi.fn(),
+      });
+      const run = vi
+        .spyOn(
+          controller as unknown as {
+            runTranslation(
+              source: string,
+            ): Promise<{ kind: 'translated'; text: string; sourceUnitsKept: number }>;
+          },
+          'runTranslation',
+        )
+        .mockImplementation(async (text) => ({ kind: 'translated', text, sourceUnitsKept: 0 }));
+      const target = {
+        insertAdjacentToSessionRange: vi.fn(() => true),
+        replaceUtteranceTranslation: vi.fn(() => true),
+      };
+      controller.observeTranscriptionQueue('s', 'catching_up');
+      if (recovery === 'audio recovery') {
+        controller.observeTranscriptionQueue('s', 'normal');
+        controller.observeAudioBacklog('s', 12_000);
+      }
+      controller.observeTranscriptionQueue('other', 'falling_behind');
+      controller.translateRealtime('draft', target, {
+        utteranceId: 'u',
+        revision: 0,
+        isFinal: false,
+      });
+      controller.translateRealtime('final', target, {
+        utteranceId: 'u',
+        revision: 1,
+        isFinal: true,
+      });
+      const done = vi.fn();
+      const drain = controller.drainRealtime(target).then(done);
+      await vi.advanceTimersByTimeAsync(60_000);
       expect(run).not.toHaveBeenCalled();
-      controller.observeAudioBacklog('s', 500);
-    }
-    else if (recovery === 'queue recovery') controller.observeTranscriptionQueue('s', 'normal');
-    else controller.finishTranscription('s');
-    await vi.advanceTimersByTimeAsync(0);
-    expect(run.mock.calls.map(([text]) => text)).toEqual(['final']);
-    await drain;
-    expect(done).toHaveBeenCalledOnce();
-    controller.dispose();
-  });
+      expect(done).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+      controller.finishTranscription('other');
+      expect(run).not.toHaveBeenCalled();
+      if (recovery === 'audio recovery') {
+        controller.observeAudioBacklog('s', 1000);
+        expect(run).not.toHaveBeenCalled();
+        controller.observeAudioBacklog('s', 500);
+      } else if (recovery === 'queue recovery') controller.observeTranscriptionQueue('s', 'normal');
+      else controller.finishTranscription('s');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(run.mock.calls.map(([text]) => text)).toEqual(['final']);
+      await drain;
+      expect(done).toHaveBeenCalledOnce();
+      controller.dispose();
+    },
+  );
 
   it('interrupts sustained overload and retries the interrupted final after recovery', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     const controller = new TranslationController({
-      app: {} as never, canReadAloud: () => false, feedback: { show: vi.fn() },
+      app: {} as never,
+      canReadAloud: () => false,
+      feedback: { show: vi.fn() },
       getSettings: () => ({ ...DEFAULT_PLUGIN_SETTINGS, realtimeTranslationEnabled: true }),
       logger: { warn: vi.fn() } as never,
       modelManager: { getState: () => ({ catalog: { models: [] }, installedModels: [] }) } as never,
-      onReadAloud: vi.fn(), openModelPicker: vi.fn(), saveSettings: vi.fn(),
+      onReadAloud: vi.fn(),
+      openModelPicker: vi.fn(),
+      saveSettings: vi.fn(),
     });
     let signal: AbortSignal | undefined;
-    const run = vi.spyOn(controller as unknown as {
-      runTranslation(...args: unknown[]): Promise<unknown>;
-    }, 'runTranslation').mockImplementationOnce((...args) => new Promise((_resolve, reject) => {
-      signal = (args[4] as { signal: AbortSignal }).signal;
-      signal.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')), { once: true });
-    })).mockResolvedValue({ kind: 'translated', text: 'done', sourceUnitsKept: 0 });
-    const target = { insertAdjacentToSessionRange: vi.fn(() => true), replaceUtteranceTranslation: vi.fn(() => true) };
+    const run = vi
+      .spyOn(
+        controller as unknown as {
+          runTranslation(...args: unknown[]): Promise<unknown>;
+        },
+        'runTranslation',
+      )
+      .mockImplementationOnce(
+        (...args) =>
+          new Promise((_resolve, reject) => {
+            signal = (args[4] as { signal: AbortSignal }).signal;
+            signal.addEventListener(
+              'abort',
+              () => reject(new DOMException('cancelled', 'AbortError')),
+              { once: true },
+            );
+          }),
+      )
+      .mockResolvedValue({ kind: 'translated', text: 'done', sourceUnitsKept: 0 });
+    const target = {
+      insertAdjacentToSessionRange: vi.fn(() => true),
+      replaceUtteranceTranslation: vi.fn(() => true),
+    };
     controller.translateRealtime('final', target, { utteranceId: 'u', revision: 1, isFinal: true });
     controller.observeAudioBacklog('s', 3000);
     await vi.advanceTimersByTimeAsync(1000);
